@@ -1,0 +1,1362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Futures Case Checker</title>
+<style>
+:root{--bg:#f6f6f3;--fg:#1b1b19;--mut:#6a6a64;--card:#fff;--line:#e2e2dc;--bad:#b83227;--good:#1d7d45;--warn:#a86a08;--hl:#fff3d1;--accent:#1b1b19;--onaccent:#fff}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#151514;--fg:#ececea;--mut:#9b9b95;--card:#1e1e1c;--line:#34342f;--bad:#ff6d5e;--good:#4fd183;--warn:#f1b64c;--hl:#3b3319;--accent:#ececea;--onaccent:#151514}}
+:root[data-theme="dark"]{--bg:#151514;--fg:#ececea;--mut:#9b9b95;--card:#1e1e1c;--line:#34342f;--bad:#ff6d5e;--good:#4fd183;--warn:#f1b64c;--hl:#3b3319;--accent:#ececea;--onaccent:#151514}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;margin:0;padding:32px 16px}
+main{max-width:720px;margin:auto}
+h1{font-size:22px;margin:0 0 4px} .sub{color:var(--mut);margin:0 0 24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:14px}
+label{display:block;font-weight:600;margin-bottom:6px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+input[type=text]{flex:1;min-width:0;padding:11px 12px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--fg);font:15px ui-monospace,SFMono-Regular,Menlo,monospace}
+button{padding:11px 18px;border:0;border-radius:9px;background:var(--accent);color:var(--onaccent);font-weight:600;font-size:15px;cursor:pointer}
+button:disabled{opacity:.45;cursor:default}
+button.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
+.status{color:var(--mut);margin-top:10px;min-height:1.5em}
+.status.err{color:var(--bad)}
+.verdict{font-size:24px;font-weight:700;margin:0 0 6px}
+.bad{color:var(--bad)} .good{color:var(--good)} .warn{color:var(--warn)}
+ul{margin:6px 0 0;padding-left:20px}
+.macro{padding:4px 14px;border:1px solid var(--line);border-radius:9px;background:var(--bg);font-size:14px;line-height:1.55}
+.macro a{color:#2563eb} @media (prefers-color-scheme:dark){.macro a{color:#7aa7ff}}
+details summary{cursor:pointer;font-weight:600}
+table{width:100%;border-collapse:collapse;margin:10px 0 4px}
+td,th{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left}
+th{color:var(--mut);font-weight:500;font-size:13px}
+.n{text-align:right;font-variant-numeric:tabular-nums}
+tr.hl td{background:var(--hl)}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:10px}
+.kv div{border:1px solid var(--line);border-radius:9px;padding:10px}
+.kv span{display:block;color:var(--mut);font-size:12px} .kv b{font-size:17px}
+.hidden{display:none}
+/* Faded progress bar fixed to the top of the screen while a check runs */
+:root{--bar:#2563eb}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bar:#7aa7ff}}
+:root[data-theme="dark"]{--bar:#7aa7ff}
+#progress{position:fixed;top:0;left:0;right:0;height:3px;z-index:100;pointer-events:none;opacity:0;transition:opacity .6s ease}
+#progress.on{opacity:1}
+#progress .fill{height:100%;width:0;background:linear-gradient(90deg,transparent,var(--bar) 70%);opacity:.75;
+  box-shadow:0 0 10px var(--bar),0 0 4px var(--bar);border-radius:0 2px 2px 0;transition:width .3s ease-out}
+#progress.err .fill{--bar:#e5484d}
+@media (prefers-reduced-motion:reduce){#progress .fill{transition:none}}
+.events tr[data-i]{cursor:pointer} .events tr[data-i]:hover td{background:var(--hl)}
+.events tr.sel td{background:var(--hl);font-weight:600}
+.badge{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600;border:1px solid currentColor}
+.tabs{display:flex;gap:4px;margin:0 0 14px;border-bottom:1px solid var(--line)}
+.tab{background:transparent;color:var(--mut);border-radius:0;padding:10px 14px;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.active{color:var(--fg);border-bottom-color:var(--fg)}
+.note{color:var(--mut);font-size:13px;margin-top:8px}
+</style>
+</head>
+<body>
+<div id="progress" role="progressbar" aria-label="Check in progress" aria-valuemin="0" aria-valuemax="100"><div class="fill"></div></div>
+<main>
+  <h1>Futures Case Checker</h1>
+  <p class="sub">Enter an account name to check whether the liquidation claim is valid and get the macro.</p>
+
+  <div class="card" id="keyCard">
+    <label for="keyFile">Step 1 · Load the BigQuery key file</label>
+    <input type="file" id="keyFile" accept=".json,application/json">
+    <p class="note">Select <code>fundednext-sa.json</code> (in your <code>.gcp</code> folder; press ⌘⇧. in the file picker to show hidden folders). It stays in this tab's memory only.</p>
+  </div>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="auto" role="tab">Auto-detect</button>
+    <button class="tab" data-tab="illiquid" role="tab">Illiquid contract</button>
+    <button class="tab" data-tab="mll" role="tab">Trailing MLL</button>
+    <button class="tab" data-tab="fmll" role="tab">Floating MLL</button>
+    <button class="tab" data-tab="ntp" role="tab">Non-tradable period</button>
+  </nav>
+
+  <!-- ================= Auto-detect tab ================= -->
+  <section id="tab-auto">
+  <div class="card">
+    <label for="a-acct">Account name</label>
+    <div class="row">
+      <input type="text" id="a-acct" placeholder="FNFT..." autocomplete="off" spellcheck="false">
+      <input type="text" id="a-ticket" placeholder="Ticket # (optional)" autocomplete="off" style="flex:0 0 170px">
+      <button id="a-go" disabled>Check</button>
+    </div>
+    <div class="status" id="a-status">Load the key file first.</div>
+  </div>
+
+  <div id="a-out" class="hidden">
+    <div class="card">
+      <p class="verdict" id="a-verdict"></p>
+      <div id="a-headline"></div>
+      <table id="a-events" class="events"></table>
+      <p class="note">Click a liquidation to see why it got that result and its macro.</p>
+    </div>
+    <div class="card">
+      <label id="a-evTitle"></label>
+      <ul id="a-reasons"></ul>
+      <p class="note" id="a-cross"></p>
+    </div>
+    <div class="card" id="a-macroCard">
+      <label for="a-macro">Macro <span class="note" id="a-macroFor" style="font-weight:400"></span>
+        <select id="a-variant" class="hidden" style="margin-left:8px;font-weight:400">
+          <option value="detailed">Detailed (account went into profit first)</option>
+          <option value="short">Short (losing from the start)</option></select></label>
+      <div id="a-macro" class="macro"></div>
+      <div class="row" style="margin-top:8px"><button id="a-copy">Copy macro</button></div>
+    </div>
+  </div>
+  </section>
+
+  <!-- ================= Floating MLL tab ================= -->
+  <section id="tab-fmll" class="hidden">
+  <div class="card">
+    <label for="f-acct">Account name</label>
+    <div class="row">
+      <input type="text" id="f-acct" placeholder="FNFT..." autocomplete="off" spellcheck="false">
+      <input type="text" id="f-ticket" placeholder="Ticket # (optional)" autocomplete="off" style="flex:0 0 170px">
+      <button id="f-go" disabled>Check</button>
+    </div>
+    <div class="status" id="f-status">Load the key file first.</div>
+  </div>
+
+  <div id="f-out" class="hidden">
+    <div class="card">
+      <p class="verdict" id="f-verdict"></p>
+      <div id="f-headline"></div>
+      <table id="f-table"></table>
+      <ul id="f-reasons"></ul>
+    </div>
+    <div class="card" id="f-macroCard">
+      <label for="f-macro">Macro <select id="f-variant" style="margin-left:8px;font-weight:400">
+        <option value="detailed">Detailed (account went into profit first)</option>
+        <option value="short">Short (losing from the start)</option></select></label>
+      <div id="f-macro" class="macro"></div>
+      <div class="row" style="margin-top:8px"><button id="f-copy">Copy macro</button></div>
+    </div>
+  </div>
+  </section>
+
+  <!-- ================= Non-tradable period tab ================= -->
+  <section id="tab-ntp" class="hidden">
+  <div class="card">
+    <label for="n-acct">Account name</label>
+    <div class="row">
+      <input type="text" id="n-acct" placeholder="FNFT..." autocomplete="off" spellcheck="false">
+      <input type="text" id="n-ticket" placeholder="Ticket # (optional)" autocomplete="off" style="flex:0 0 170px">
+      <button id="n-go" disabled>Check</button>
+    </div>
+    <div class="status" id="n-status">Load the key file first.</div>
+  </div>
+
+  <div id="n-out" class="hidden">
+    <div class="card">
+      <p class="verdict" id="n-verdict"></p>
+      <div id="n-headline"></div>
+      <table id="n-events" class="events"></table>
+      <ul id="n-reasons"></ul>
+      <p class="note">Non-tradable period: 3:10–5:00 PM CT on weekdays, and Friday 3:10 PM to Sunday 5:00 PM CT. Exchange holidays aren't included.</p>
+    </div>
+    <div class="card" id="n-macroCard">
+      <label for="n-macro">Macro</label>
+      <div id="n-macro" class="macro"></div>
+      <div class="row" style="margin-top:8px"><button id="n-copy">Copy macro</button></div>
+    </div>
+  </div>
+  </section>
+
+  <!-- ================= Trailing MLL tab ================= -->
+  <section id="tab-mll" class="hidden">
+  <div class="card">
+    <label for="m-acct">Account name</label>
+    <div class="row">
+      <input type="text" id="m-acct" placeholder="FNFT..." autocomplete="off" spellcheck="false">
+      <input type="text" id="m-ticket" placeholder="Ticket # (optional)" autocomplete="off" style="flex:0 0 170px">
+      <button id="m-go" disabled>Check</button>
+    </div>
+    <div class="status" id="m-status">Load the key file first.</div>
+  </div>
+
+  <div id="m-out" class="hidden">
+    <div class="card" id="m-shot">
+      <p class="verdict" id="m-verdict"></p>
+      <div id="m-headline"></div>
+      <table id="m-table"></table>
+      <p class="note">Screenshot this card to attach to the reply.</p>
+    </div>
+    <div class="card" id="m-macroCard">
+      <label for="m-macro">Macro</label>
+      <div id="m-macro" class="macro"></div>
+      <div class="row" style="margin-top:8px"><button id="m-copy">Copy macro</button></div>
+    </div>
+  </div>
+  </section>
+
+  <!-- ================= Illiquid contract tab ================= -->
+  <section id="tab-illiquid" class="hidden">
+  <div class="card">
+    <label for="acct">Account name</label>
+    <div class="row">
+      <input type="text" id="acct" placeholder="FNFT..." autocomplete="off" spellcheck="false">
+      <button id="go" disabled>Check</button>
+    </div>
+    <div class="status" id="status">Load the key file first.</div>
+  </div>
+
+  <div id="out" class="hidden">
+    <div class="card">
+      <p class="verdict" id="verdict"></p>
+      <div id="headline"></div>
+      <table id="events" class="events"></table>
+      <p class="note">Click a liquidation to see its details and macro.</p>
+    </div>
+    <div class="card">
+      <label id="evTitle"></label>
+      <ul id="reasons"></ul>
+    </div>
+    <div class="card" id="macroCard">
+      <label for="macro">Macro <span class="note" id="macroFor" style="font-weight:400"></span></label>
+      <p class="warn hidden" id="macroWarn">Not a clear match. Read the details before sending.</p>
+      <div id="macro" class="macro"></div>
+      <div class="row" style="margin-top:8px">
+        <button id="copy">Copy macro</button>
+        <button id="getChart" class="ghost">Get Tradovate chart</button>
+      </div>
+      <div class="status" id="chartStatus"></div>
+    </div>
+    <div class="card">
+      <details id="details">
+        <summary>Details</summary>
+        <div class="kv" id="kv"></div>
+        <table id="volTable"></table>
+        <table id="fillTable"></table>
+      </details>
+    </div>
+  </div>
+  </section>
+</main>
+
+<script id="core">
+// ---- Core logic (mirrors checker.py). No UI code here so it can be tested outside the browser.
+const PROJECT = "airy-passkey-867";
+const D = "`airy-passkey-867.ep_FundedNext";
+const T = name => `${D}.${name}\``;
+const MAX_SHARE = 0.15, MIN_GAP_TICKS = 20, MIN_PRODUCT_QTY = 500;
+const MAX_STALE_TICKS = 10;  // exit within 10 ticks of the last price = real market move
+const MAX_LIQS = 20;         // liquidations checked per account (most recent)
+const FAQ_TEXT = "Instrument/Symbol’s Monthly Availability FAQ";
+const FAQ_URL = "https://helpfutures.fundednext.com/en/articles/14254366-what-are-the-symbols-instruments-monthly-availability-for-futures-trading";
+
+const b64u = bytes => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const b64uStr = s => b64u(new TextEncoder().encode(s));
+
+async function getToken(key) {
+  const now = Math.floor(Date.now() / 1000);
+  const unsigned = b64uStr(JSON.stringify({ alg: "RS256", typ: "JWT" })) + "." + b64uStr(JSON.stringify({
+    iss: key.client_email, scope: "https://www.googleapis.com/auth/bigquery",
+    aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 }));
+  const der = Uint8Array.from(atob(key.private_key.replace(/-----[^-]+-----/g, "").replace(/\s/g, "")), c => c.charCodeAt(0));
+  const k = await crypto.subtle.importKey("pkcs8", der, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+  const sig = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", k, new TextEncoder().encode(unsigned)));
+  const r = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=" + unsigned + "." + b64u(sig) });
+  const j = await r.json();
+  if (!j.access_token) throw new Error("Key rejected: " + (j.error_description || j.error || r.status));
+  return { value: j.access_token, exp: now + 3500 };
+}
+
+function param(name, v) {
+  if (Array.isArray(v)) return { name, parameterType: { type: "ARRAY", arrayType: { type: "INT64" } },
+                                 parameterValue: { arrayValues: v.map(x => ({ value: String(x) })) } };
+  if (v && v.date) return { name, parameterType: { type: "DATE" }, parameterValue: { value: v.date } };
+  if (v && v.datetime) return { name, parameterType: { type: "DATETIME" }, parameterValue: { value: v.datetime } };
+  if (typeof v === "number") return { name, parameterType: { type: "INT64" }, parameterValue: { value: String(v) } };
+  return { name, parameterType: { type: "STRING" }, parameterValue: { value: String(v) } };
+}
+
+function parseVal(v, type) {
+  if (v === null || v === undefined) return null;
+  switch (type) {
+    case "INTEGER": case "INT64": case "FLOAT": case "FLOAT64": case "NUMERIC": return Number(v);
+    case "BOOLEAN": case "BOOL": return v === "true";
+    case "TIMESTAMP": return new Date(Number(v) * 1000);
+    case "DATETIME": return new Date(v.replace(" ", "T").replace(/(\.\d{3})\d*/, "$1") + "Z");  // stored as UTC
+    default: return v;
+  }
+}
+
+// Cell parser that also handles arrays (REPEATED) and structs (RECORD)
+function parseCell(cell, field) {
+  if (field.mode === "REPEATED") return (cell.v || []).map(x => parseCell(x, { ...field, mode: "NULLABLE" }));
+  if (field.type === "RECORD" || field.type === "STRUCT")
+    return cell.v == null ? null : Object.fromEntries(cell.v.f.map((c, i) => [field.fields[i].name, parseCell(c, field.fields[i])]));
+  return parseVal(cell.v, field.type);
+}
+
+// Run a query and return rows as objects. opts.dryRun returns {gb} instead.
+async function bq(auth, sql, params = {}, opts = {}) {
+  const tok = await auth();
+  const H = { authorization: "Bearer " + tok, "content-type": "application/json" };
+  const base = `https://bigquery.googleapis.com/bigquery/v2/projects/${PROJECT}`;
+  let r = await fetch(base + "/queries", { method: "POST", headers: H, body: JSON.stringify({
+    query: sql, useLegacySql: false, parameterMode: "NAMED", timeoutMs: 90000, dryRun: !!opts.dryRun,
+    useQueryCache: !opts.dryRun, queryParameters: Object.entries(params).map(([k, v]) => param(k, v)) }) });
+  let j = await r.json();
+  if (j.error) throw new Error(j.error.message);
+  if (opts.dryRun) return { gb: Number(j.totalBytesProcessed) / 1e9 };
+  const { jobId, location } = j.jobReference;
+  let rows = [];
+  while (true) {
+    if (j.error) throw new Error(j.error.message);
+    if (j.jobComplete) {
+      const f = j.schema.fields;
+      rows = rows.concat((j.rows || []).map(row => Object.fromEntries(row.f.map((c, i) => [f[i].name, parseCell(c, f[i])]))));
+      if (!j.pageToken) break;
+    }
+    const q = new URLSearchParams({ location, timeoutMs: "90000" });
+    if (j.jobComplete && j.pageToken) q.set("pageToken", j.pageToken);
+    j = await (await fetch(`${base}/queries/${jobId}?${q}`, { headers: H })).json();
+  }
+  return rows;
+}
+
+// ---- time helpers (CT)
+const ctParts = d => Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hourCycle: "h23",
+  year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })
+  .formatToParts(d).map(p => [p.type, p.value]));
+const fmtCT = d => { const p = ctParts(d); return `${p.month}/${p.day}/${p.year} ${p.hour}:${p.minute}:${p.second}`; };
+function tradeDateOf(d) {           // CME session opening at 17:00 CT belongs to the next day
+  const p = ctParts(d);
+  const day = new Date(Date.UTC(+p.year, +p.month - 1, +p.day + (+p.hour >= 17 ? 1 : 0)));
+  return day.toISOString().slice(0, 10);
+}
+const decimals = t => { const s = String(+t.toFixed(10)); return s.includes(".") ? s.split(".")[1].length : 0; };
+const money = x => Math.abs(x).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// ---- queries
+async function findAccount(auth, name) {
+  const rows = await bq(auth, `
+    SELECT 'demo' side, id, name FROM ${T("demo_accounts")} WHERE name = @name
+    UNION ALL SELECT 'live', id, name FROM ${T("live_accounts")} WHERE name = @name
+    UNION ALL SELECT 'demo (archived)', accountId, name FROM ${T("demo_accountsArchive")} WHERE name = @name`, { name });
+  rows.sort((a, b) => a.side.includes("archived") - b.side.includes("archived"));
+  return rows[0] || null;
+}
+
+const tbl = side => side === "live" ? "live" : "demo";
+
+// Account CTE for one side (demo also checks the archive). Used by the side-by-side lookups below.
+const acctCte = side => `acct AS (
+    SELECT id, name, 0 arch FROM ${T(side + "_accounts")} WHERE name = @name` +
+  (side === "demo" ? ` UNION ALL SELECT accountId, name, 1 FROM ${T("demo_accountsArchive")} WHERE name = @name` : "") +
+  ` ORDER BY arch LIMIT 1)`;
+
+// Run the same lookup on the demo and live side at the same time; keep the side where the account exists
+async function bothSides(auth, name, sqlFor) {
+  const [demo, live] = await Promise.all(["demo", "live"].map(s => bq(auth, sqlFor(s), { name })));
+  // Same preference as before: current demo account, then live, then archived demo
+  const [side, rows] = demo.length && !demo[0].arch ? ["demo", demo] : live.length ? ["live", live]
+    : demo.length ? ["demo", demo] : [null, []];
+  if (!side) return { acct: null, rows };
+  return { acct: { side: side === "demo" && rows[0].arch ? "demo (archived)" : side, id: rows[0].accountId, name: rows[0].accountName }, rows };
+}
+
+// Account lookup + every auto-liquidation on it (most recent MAX_LIQS, oldest first)
+async function lookupLiquidations(auth, name) {
+  const { acct, rows } = await bothSides(auth, name, s => `
+    WITH ${acctCte(s)}
+    SELECT acct.id accountId, acct.name accountName, acct.arch, l.contractId, l.timestamp, l.liquidatedNetPos,
+           l.liquidatedNetPrice, l.marketPriceSnapshot, l.exitAvgFillPrice, l.exitOrderId, c.name contract,
+           m.productId, p.name product, p.tickSize, p.valuePerPoint, COUNT(l.contractId) OVER () n_liqs
+    FROM acct LEFT JOIN ${T(s + "_autoLiqTransactions")} l ON l.accountId = acct.id
+    LEFT JOIN ${T("contracts")} c ON l.contractId = c.id
+    LEFT JOIN ${T("contractMaturities")} m ON c.contractMaturityId = m.id
+    LEFT JOIN ${T("products")} p ON m.productId = p.id
+    ORDER BY l.timestamp DESC LIMIT ${MAX_LIQS}`);
+  return { acct, liqs: rows.filter(r => r.contractId != null).reverse() };
+}
+
+// One pass over the fills for all liquidations: daily volume per contract month of every product involved,
+// with the account's own fills in the liquidated contracts collected in the same pass.
+// base_*_fills carries accountId, so no separate orders lookup; the fills table is read once (~45 s vs ~110 s).
+function fillsSql(side) {
+  const t = tbl(side);
+  return `
+    WITH sib AS (
+      SELECT c.id, c.name, m.productId FROM ${T("contracts")} c JOIN ${T("contractMaturities")} m ON c.contractMaturityId = m.id
+      WHERE m.productId IN UNNEST(@pids)
+        AND DATE(m.expirationDate) BETWEEN DATE_SUB(@tdMin, INTERVAL 10 DAY) AND DATE_ADD(@tdMax, INTERVAL 400 DAY)),
+    f AS (
+      SELECT contractId, orderId, timestamp, action, qty, price, tradeDate, accountId FROM ${T("base_" + t + "_fills")}
+      WHERE tradeDate BETWEEN DATE_SUB(@tdMin, INTERVAL 1 DAY) AND @tdMax AND contractId IN (SELECT id FROM sib))
+    SELECT f.tradeDate, s.productId, s.name contract, f.contractId, SUM(f.qty) qty,
+      ARRAY_AGG(IF(f.accountId = @aid AND f.contractId IN UNNEST(@cids),
+        STRUCT(f.orderId, f.timestamp AS ts, f.action, f.qty, f.price), NULL) IGNORE NULLS) acct
+    FROM f JOIN sib s ON f.contractId = s.id
+    GROUP BY 1, 2, 3, 4`;
+}
+
+// Turn the single-pass result into volume rows + account fill rows for analyze()
+const flattenFills = rows => rows.flatMap(r => [
+  { kind: "vol", tradeDate: r.tradeDate, productId: r.productId, contract: r.contract, qty: r.qty },
+  ...r.acct.map(a => ({ kind: "acct", contractId: r.contractId, tradeDate: r.tradeDate, ...a })),
+]);
+function fillsParams(acct, liqs) {
+  const tds = liqs.map(l => tradeDateOf(l.timestamp)).sort();
+  return { pids: [...new Set(liqs.map(l => l.productId))], cids: [...new Set(liqs.map(l => l.contractId))],
+           tdMin: { date: tds[0] }, tdMax: { date: tds[tds.length - 1] }, aid: acct.id };
+}
+
+// ---- analysis
+function entryFills(acctFills, liq) {
+  const before = acctFills.filter(f => f.orderId !== liq.exitOrderId && f.ts <= liq.timestamp).sort((a, b) => a.ts - b.ts);
+  let net = 0; const picked = [];
+  for (let i = before.length - 1; i >= 0; i--) {
+    net += before[i].action === "Buy" ? before[i].qty : -before[i].qty;
+    picked.unshift(before[i]);
+    if (net === liq.liquidatedNetPos) return { fills: picked, ok: true };
+  }
+  return { fills: before, ok: false };
+}
+
+function analyze(liq, rows) {
+  const td = tradeDateOf(liq.timestamp);
+  const vol = {};
+  // Rows may cover several liquidations: keep this one's trade date / product / contract
+  rows = rows.filter(r => r.kind === "vol"
+    ? (r.tradeDate === undefined || r.tradeDate === td) && (r.productId == null || r.productId === liq.productId)
+    : (r.contractId == null || r.contractId === liq.contractId));
+  rows.filter(r => r.kind === "vol").forEach(r => vol[r.contract] = r.qty);
+  const total = Object.values(vol).reduce((a, b) => a + b, 0);
+  const traded = liq.contract;
+  const share = total ? (vol[traded] || 0) / total : 0;
+  const active = Object.keys(vol).sort((a, b) => vol[b] - vol[a])[0] || null;
+  const { tickSize: tick, valuePerPoint: vpp, liquidatedNetPos: net, liquidatedNetPrice: px, marketPriceSnapshot: snap, exitAvgFillPrice: exit } = liq;
+  const loss = (px - snap) * net * vpp;
+  const gapTicks = Math.abs(snap - px) / tick;
+  const realLoss = exit == null ? null : (px - exit) * net * vpp;
+  const staleTicks = exit == null ? null : Math.abs(exit - snap) / tick;
+  const { fills, ok } = entryFills(rows.filter(r => r.kind === "acct"), liq);
+  const pct = (x, d = 2) => (x * 100).toFixed(d) + "%";
+
+  let verdict; const reasons = [];
+  if (total < MIN_PRODUCT_QTY) {
+    verdict = "REVIEW";
+    reasons.push(`Only ${total.toLocaleString()} ${liq.product} contracts traded firm-wide on ${td}: too little volume to tell the active month.`);
+  } else if (traded === active || share >= 0.5) {
+    reasons.push(`${traded} was the active month (${pct(share, 1)} of ${liq.product} volume on ${td}).`);
+    if (staleTicks != null && staleTicks > MAX_STALE_TICKS) {
+      verdict = "REVIEW";
+      reasons.push(`But the exit filled at ${exit.toFixed(decimals(tick))}, ${Math.round(staleTicks)} ticks away from the last price ${snap}: check this one manually.`);
+    } else {
+      verdict = "NOT A MATCH";
+      if (staleTicks != null) reasons.push(`The exit filled at ${exit.toFixed(decimals(tick))}, right at the last price (${snap}): a real market move, so the liquidation itself is valid.`);
+    }
+  } else if (share < MAX_SHARE && loss > 0 && gapTicks >= MIN_GAP_TICKS) {
+    verdict = "ILLIQUID MATCH";
+    reasons.push(`${traded} had only ${pct(share)} of ${liq.product} volume on ${td}. The active month was ${active}.`);
+    reasons.push(`The last price at liquidation (${snap}) was ${Math.round(gapTicks).toLocaleString()} ticks against the position.`);
+  } else {
+    verdict = "REVIEW";
+    if (share >= MAX_SHARE) reasons.push(`${traded} had ${pct(share, 1)} of volume: not clearly illiquid.`);
+    if (loss <= 0) reasons.push("The last price at liquidation was not against the position.");
+    else if (gapTicks < MIN_GAP_TICKS) reasons.push(`The price gap was only ${Math.round(gapTicks)} ticks: may be a normal market move.`);
+  }
+  if (!ok) reasons.push("Entry fills did not add up to the liquidated position: check the fill times in the macro.");
+
+  const res = { verdict, reasons, td, traded, active, share, vol, total, loss, gapTicks, realLoss, staleTicks, fills };
+  res.macro = buildMacro(liq, res);
+  return res;
+}
+
+function buildMacro(liq, r) {
+  const dp = decimals(liq.tickSize), c = liq.contract;
+  const times = r.fills.map(f => fmtCT(f.ts)).join(" & ");
+  const prices = r.fills.map(f => f.price.toFixed(dp)).join(" & ");
+  return `Following up on your recent ticket regarding the issue, we have reviewed it and are here to assist you further.\n\n` +
+    `We noticed you were trading ${c}. Kindly note that this contract is currently illiquid; the details are listed on the CME website. ` +
+    `Due to low volume or orders, it causes inefficiency in market execution or bad fills. This is what caused the liquidation. ` +
+    `The trade, which was connected to the liquidation, was on ${c} with ${Math.abs(liq.liquidatedNetPos)} contract(s) filled at ${times} CT ` +
+    `at the index price of ${prices}. Kindly note that there were no formed candles at that time and the available last price was ` +
+    `${liq.marketPriceSnapshot.toFixed(dp)}. So the trade faced an instant unrealized loss of ($${money(r.loss)}), which cumulatively exceeded the loss limit.\n\n` +
+    `We recommend switching to symbols or contracts such as ${r.active}, according to current volume. For further clarification, ` +
+    `please go through our ${FAQ_TEXT} (${FAQ_URL}) and follow CME website.`;
+}
+
+// Rich-text version for pasting: the FAQ name becomes a link instead of showing the URL
+function macroHtml(plain, text = FAQ_TEXT, url = FAQ_URL) {
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  if (!url) return plain.split("\n\n").map(p => "<p>" + esc(p) + "</p>").join("");   // macro without a link
+  const link = `<a href="${url}">${esc(text)}</a>`;
+  return plain.split("\n\n").map(p => "<p>" + esc(p).replace(esc(`${text} (${url})`), link) + "</p>").join("");
+}
+
+async function runCheck(auth, name, onStep = () => {}) {
+  onStep("Looking up the account and its liquidations…");
+  const { acct, liqs } = await lookupLiquidations(auth, name);
+  if (!acct) throw new Error(`No demo, live or archived account named ${name}.`);
+  if (!liqs.length) return { acct, events: [] };
+  onStep(`Checking fills and contract volume for ${liqs.length} liquidation(s) (about 45 seconds)…`);
+  const rows = flattenFills(await bq(auth, fillsSql(acct.side), fillsParams(acct, liqs)));
+  return { acct, events: liqs.map(liq => ({ liq, res: analyze(liq, rows) })) };
+}
+
+// The event the macro is for: the earliest illiquid liquidation (usually the one that breached), else the latest one
+const focusIndex = events => {
+  const i = events.findIndex(e => e.res.verdict === "ILLIQUID MATCH");
+  return i >= 0 ? i : events.length - 1;
+};
+
+// ================= Trailing MLL =================
+// Valid breach when highest balance (maxNetLiq) − current cash balance ≥ trailingMaxDrawdown.
+const MLL_FAQ_TEXT = "What is the Maximum Loss Limit at FundedNext Futures and how does it work?";
+const MLL_FAQ_URL = "https://helpfutures.fundednext.com/en/articles/14298225-what-is-the-maximum-loss-limit-at-fundednext-futures-and-how-does-it-work";
+const cents = x => Math.round(x * 100) / 100;
+
+async function mllCheck(auth, name, onStep = () => {}) {
+  onStep("Looking up the account, balances and loss limit…");
+  // Account + loss limit + highest balance + latest cash balance, demo and live side queried in parallel
+  const { acct, rows: [v] } = await bothSides(auth, name, s => `
+    WITH ${acctCte(s)},
+    cb AS (SELECT accountId, tradeDate, amount FROM ${T(s + "_cashBalances")} WHERE accountId IN (SELECT id FROM acct)
+           QUALIFY ROW_NUMBER() OVER (ORDER BY tradeDate DESC) = 1)
+    SELECT acct.id accountId, acct.name accountName, acct.arch, al.trailingMaxDrawdown, al.trailingMaxDrawdownLimit,
+           al.trailingMaxDrawdownMode, rs.maxNetLiq, cb.tradeDate cashDate, cb.amount cash
+    FROM acct
+    LEFT JOIN ${T(s + "_userAccountAutoLiqs")} al ON al.id = acct.id
+    LEFT JOIN ${T(s + "_accountRiskStatuses")} rs ON rs.id = acct.id
+    LEFT JOIN cb ON cb.accountId = acct.id`);
+  if (!acct) throw new Error(`No demo, live or archived account named ${name}.`);
+  const missing = [["trailingMaxDrawdown", "loss limit"], ["maxNetLiq", "highest balance"], ["cash", "current balance"]]
+    .filter(([k]) => v[k] == null).map(([, label]) => label);
+  if (missing.length) throw new Error(`No ${missing.join(", ")} found for ${acct.name}. The account may be outside the data retention window.`);
+  const high = cents(v.maxNetLiq), cash = cents(v.cash), limit = cents(v.trailingMaxDrawdown);
+  const diff = cents(high - cash);
+  return { acct, high, cash, cashDate: v.cashDate, limit, diff, mode: v.trailingMaxDrawdownMode,
+           threshold: v.trailingMaxDrawdownLimit, valid: diff >= limit };
+}
+
+// ================= Non-tradable period =================
+// A liquidation inside the non-tradable window whose auto-liq alert was triggered by margin (the margin
+// requirement jumps when the window starts) = positions closed by the trading-hours rule, not a loss limit.
+const NTP_FAQ_TEXT = "here";
+const NTP_FAQ_URL = "https://helpfutures.fundednext.com/en/articles/14268506-does-fundednext-futures-allow-overnight-and-weekend-trade-holding";
+
+// 15:10–17:00 CT Mon–Thu; weekend from Friday 15:10 to Sunday 17:00. Exchange holidays are not modelled.
+function inNonTradable(d) {
+  const p = ctParts(d);
+  const wd = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", weekday: "short" }).format(d);
+  const t = +p.hour * 60 + +p.minute, START = 15 * 60 + 10, END = 17 * 60;
+  if (wd === "Sat") return true;
+  if (wd === "Sun") return t < END;
+  if (wd === "Fri") return t >= START;
+  return t >= START && t < END;
+}
+
+async function ntpCheck(auth, name, onStep = () => {}) {
+  onStep("Looking up the account, liquidations and auto-liq alerts…");
+  const { acct, rows } = await bothSides(auth, name, s => `
+    WITH ${acctCte(s)},
+    l AS (SELECT id, accountId, contractId, timestamp, liquidatedNetPos, liquidatedNetPrice, marketPriceSnapshot, exitAvgFillPrice
+          FROM ${T(s + "_autoLiqTransactions")} WHERE accountId IN (SELECT id FROM acct)
+          QUALIFY ROW_NUMBER() OVER (ORDER BY timestamp DESC) <= ${MAX_LIQS}),
+    al AS (SELECT accountId, timestamp, text, meta FROM ${T(s + "_adminAlertSignals")} WHERE accountId IN (SELECT id FROM acct))
+    SELECT acct.id accountId, acct.name accountName, acct.arch, l.id liqId, l.timestamp, l.liquidatedNetPos,
+           l.liquidatedNetPrice, l.marketPriceSnapshot, l.exitAvgFillPrice, c.name contract, p.valuePerPoint,
+           al.timestamp alertTs, al.text alertText, al.meta alertMeta
+    FROM acct
+    LEFT JOIN l ON l.accountId = acct.id
+    LEFT JOIN al ON al.accountId = l.accountId AND ABS(DATETIME_DIFF(al.timestamp, l.timestamp, SECOND)) <= 10
+    LEFT JOIN ${T("contracts")} c ON l.contractId = c.id
+    LEFT JOIN ${T("contractMaturities")} m ON c.contractMaturityId = m.id
+    LEFT JOIN ${T("products")} p ON m.productId = p.id`);
+  if (!acct) throw new Error(`No demo, live or archived account named ${name}.`);
+
+  // One row per liquidation. Several alerts can share a second ("switched to liquidate only", "auto-liquidating",
+  // "margin close to auto-liquidation"), and BigQuery returns ties in no fixed order. So rank: the actual liquidation
+  // alert first, then liquidate-only, then other alerts; then the closest in time; then text, so every run picks the same one.
+  const kindRank = t => !t ? 9 : t.startsWith("Auto-liquidating") ? 0 : t.startsWith("Account switched to 'liquidate only'") ? 1 : 5;
+  const better = (a, b) => a.rank !== b.rank ? a.rank < b.rank : a.gap !== b.gap ? a.gap < b.gap : (a.alertText || "") < (b.alertText || "");
+  const byLiq = new Map();
+  for (const r of rows.filter(r => r.liqId != null)) {
+    const cand = { ...r, gap: r.alertTs ? Math.abs(r.alertTs - r.timestamp) : Infinity, rank: kindRank(r.alertText) };
+    const cur = byLiq.get(r.liqId);
+    if (!cur || better(cand, cur)) byLiq.set(r.liqId, cand);
+  }
+  const events = [...byLiq.values()].sort((a, b) => a.timestamp - b.timestamp).map(e => {
+    let triggers = [];
+    try { triggers = JSON.parse(e.alertMeta || "{}").autoLiqTriggers || []; } catch {}
+    const inWin = inNonTradable(e.timestamp);
+    const openPL = (e.marketPriceSnapshot - e.liquidatedNetPrice) * e.liquidatedNetPos * e.valuePerPoint;
+    const when = fmtCT(e.timestamp) + " CT";
+    let verdict; const reasons = [];
+    if (!inWin) {
+      verdict = "NOT A MATCH";
+      reasons.push(`Liquidated at ${when}, outside the non-tradable period.`);
+    } else if (triggers.length && !triggers.includes("marginPercent")) {
+      verdict = "REVIEW";
+      reasons.push(`Liquidated at ${when}, inside the non-tradable period, but the trigger was ${triggers.join(", ")}: likely a loss limit, not the trading-hours close.`);
+    } else {
+      verdict = "NTP MATCH";
+      reasons.push(`Liquidated at ${when}, inside the non-tradable period.`);
+      reasons.push(triggers.length ? "Trigger: margin. The margin requirement rises when the non-tradable period starts, which closes open positions."
+                                   : "No auto-liq alert was found to confirm the trigger.");
+    }
+    return { ...e, triggers, inWin, openPL, verdict, reasons };
+  });
+  return { acct, events, valid: events.some(e => e.verdict === "NTP MATCH") };
+}
+
+function buildNtpMacro(ticket) {
+  const t = ticket ? ` ${ticket}` : "";
+  return `Following up on your recent ticket${t} regarding the issue, we have reviewed it and are here to assist you further.\n\n` +
+    `We noticed you were trying to hold/place trades during a non-tradable period from 3:10 PM to 5:00 PM CT (Central Time), ` +
+    `when trading is not permitted. This causes running orders to be closed and new orders to be rejected automatically. ` +
+    `You can find the relevant FAQ ${NTP_FAQ_TEXT} (${NTP_FAQ_URL}) for more clarity.`;
+}
+
+// ================= Floating MLL =================
+// The trailing max loss was breached by OPEN (floating) loss: at the breach alert, live equity (Net Liq) was at or
+// below the MLL level while the cash balance alone was still above it. The Trailing MLL tab (closed balance) can't see this.
+const FMLL_CLOSE_WINDOW_MS = 10 * 60 * 1000;   // the position is closed by a liquidation up to 10 min after the breach
+
+const alertNum = s => s == null ? null : (/^\(.*\)$/.test(s) ? -1 : 1) * Number(s.replace(/[(),$]/g, ""));
+function parseAutoLiqAlert(text) {
+  if (!text) return null;
+  const m = re => (text.match(re) || [])[1];
+  const level = m(/Daily Loss Limit \$([\d,.]+)\(drawdown\)/);
+  return { level: level ? alertNum(level) : null, cash: alertNum(m(/Total Cash: \$(\(?[\d,.]+\)?)/)),
+           openPL: alertNum(m(/Open P\/L: \$(\(?[\d,.]+\)?)/)), netLiq: alertNum(m(/Net Liq: \$(\(?[\d,.]+\)?)/)),
+           dayRealized: alertNum(m(/Day Realized P\/L: \$(\(?[\d,.]+\)?)/)) };
+}
+
+// Pair each liquidation (lookupLiquidations) with its auto-liq alert (ntpCheck)
+function joinLiqAlerts(lk, ntp) {
+  const key = (ts, c) => `${ts.getTime()}|${c}`;
+  const ntpBy = new Map(ntp.events.map(e => [key(e.timestamp, e.contract), e]));
+  return lk.liqs.map(liq => {
+    const n = ntpBy.get(key(liq.timestamp, liq.contract)) || { reasons: [] };
+    return { liq, ntp: n, triggers: n.triggers || [], alertText: n.alertText };
+  });
+}
+
+function floatingBreaches(events) {
+  return events.filter(e => e.triggers.includes("trailingDrawdown")).map(e => {
+    const a = parseAutoLiqAlert(e.alertText);
+    if (!a || a.level == null || a.netLiq == null || a.cash == null) return null;   // end-of-day alerts carry no level
+    const pos = e.liq.liquidatedNetPos ? e.liq : events.map(x => x.liq).find(l => l.liquidatedNetPos &&
+      l.timestamp >= e.liq.timestamp && l.timestamp - e.liq.timestamp <= FMLL_CLOSE_WINDOW_MS);
+    // No liquidation closed the position (e.g. the trader closed it): it gets rebuilt from the fills (posFromFills)
+    return { event: e, alert: a, pos, floating: a.netLiq <= a.level && a.cash > a.level && a.openPL < 0 };
+  }).filter(Boolean);
+}
+
+async function fmllCheck(auth, name, onStep = () => {}) {
+  onStep("Looking up the account, liquidations, alerts and balances…");
+  const [lk, ntp, mll] = await Promise.all([lookupLiquidations(auth, name), ntpCheck(auth, name),
+                                            mllCheck(auth, name).catch(e => ({ error: e.message }))]);
+  if (!lk.acct) throw new Error(`No demo, live or archived account named ${name}.`);
+  const events = joinLiqAlerts(lk, ntp), breaches = floatingBreaches(events);
+  const need = breaches.filter(b => b.floating);
+  if (need.length) {
+    onStep("Fetching the entry fills of the position (about 45 seconds)…");
+    const rows = flattenFills(await bq(auth, fillsSql(lk.acct.side), fillsParams(lk.acct, need.map(b => b.pos || b.event.liq))));
+    need.forEach(b => fmllEnrich(b, rows));
+    const spikes = need.filter(b => b.spike);
+    if (spikes.length) {
+      onStep("Checking the market price around the breach (about 45 seconds)…");
+      await Promise.all(spikes.map(b => checkSpike(auth, lk.acct.side, b)));
+    }
+  }
+  return { acct: lk.acct, events, mll, breaches, valid: breaches.some(b => b.floating) };
+}
+
+const exitPLOf = p => p.exitAvgFillPrice == null ? null : (p.exitAvgFillPrice - p.liquidatedNetPrice) * p.liquidatedNetPos * p.valuePerPoint;
+
+// Entry fills of the breaching position + the balance just before it. Support's method: the cash balance after the previous
+// trade minus this trade's commissions. Tradovate deducts the commission at the entry fill, so that is exactly the
+// breach alert's "Total Cash" (e.g. FNFTCHKALEBLATKA46630: $49,919.76): always available, no extra query.
+function fmllEnrich(b, rows) {
+  if (!b.pos) posFromFills(b, rows);
+  if (b.pos && !b.entries) b.entries = analyze(b.pos, rows).fills;
+  b.priorBalance = b.alert.cash == null ? null : cents(b.alert.cash);
+  // Price at the breach implied by the open P/L. Far from both the entry and the close = possible price spike.
+  if (b.pos && b.pos.exitAvgFillPrice != null) {
+    const p = b.pos, tick = b.event.liq.tickSize || p.tickSize;
+    b.breachPrice = p.liquidatedNetPrice + b.alert.openPL / (p.liquidatedNetPos * p.valuePerPoint);
+    const off = x => Math.abs(b.breachPrice - x) / tick;
+    b.spike = tick > 0 && off(p.liquidatedNetPrice) >= SPIKE_TICKS && off(p.exitAvgFillPrice) >= SPIKE_TICKS;
+  }
+}
+
+// When no liquidation row closed the position, rebuild it from the account's fills in the breached contract:
+// running position at the breach time, the entry fills that make it up, and the fills that closed it afterwards.
+const SPIKE_TICKS = 100;
+const spikeNote = b => {
+  const tick = b.event.liq.tickSize || b.pos.tickSize;
+  const head = `The open loss implies a price of ${b.breachPrice.toFixed(2)} at the breach, about ` +
+    `${Math.round(Math.abs(b.breachPrice - b.pos.liquidatedNetPrice) / tick)} ticks from the entry (${b.pos.liquidatedNetPrice.toFixed(2)}) ` +
+    `and the close (${b.pos.exitAvgFillPrice.toFixed(2)}).`;
+  if (!b.market) return `Possible price spike: ${head} Check the chart before confirming the breach.`;
+  const m = b.market, rng = `${b.pos.contract} traded between ${m.lo} and ${m.hi} firm-wide (${m.n.toLocaleString()} fills) within a minute of the breach`;
+  return b.spikeConfirmed ? `Fast market move, confirmed: ${head} ${rng}, so that price was real.`
+    : `Likely bad price: ${head} But ${rng}, which doesn't reach that price. Check before confirming the breach.`;
+};
+
+// Firm-wide price range of the contract within ±60 s of the breach (only run when a spike is suspected)
+async function checkSpike(auth, side, b) {
+  const t = b.event.liq.timestamp, iso = d => d.toISOString().slice(0, 19).replace("T", " ");
+  const [m] = await bq(auth, `SELECT MIN(price) lo, MAX(price) hi, COUNT(*) n FROM ${T("base_" + tbl(side) + "_fills")}
+    WHERE tradeDate = @td AND contractId = @cid AND timestamp BETWEEN @t0 AND @t1`,
+    { td: { date: tradeDateOf(t) }, cid: b.event.liq.contractId,
+      t0: { datetime: iso(new Date(t - 60000)) }, t1: { datetime: iso(new Date(t.getTime() + 60000)) } });
+  if (!m || !m.n) return;
+  b.market = m;
+  const tick = b.event.liq.tickSize || b.pos.tickSize;
+  b.spikeConfirmed = b.breachPrice >= m.lo - 4 * tick && b.breachPrice <= m.hi + 4 * tick;
+}
+function posFromFills(b, rows) {
+  const L = b.event.liq, at = L.timestamp;
+  const fills = rows.filter(r => r.kind === "acct" && r.contractId === L.contractId).sort((x, y) => x.ts - y.ts);
+  const sgn = f => f.action === "Buy" ? f.qty : -f.qty;
+  const net = fills.filter(f => f.ts <= at).reduce((s, f) => s + sgn(f), 0);
+  if (!net) return;
+  const pseudo = { liquidatedNetPos: net, timestamp: at, exitOrderId: null };
+  const { fills: entries } = entryFills(fills, pseudo);
+  let run = net; const exits = [];
+  for (const f of fills.filter(f => f.ts > at)) {
+    if (Math.sign(sgn(f)) === Math.sign(net)) break;          // added to the position instead of closing it
+    exits.push(f); run += sgn(f);
+    if (Math.sign(run) !== Math.sign(net)) break;              // flat (or flipped)
+  }
+  const avg = fs => fs.length ? fs.reduce((s, f) => s + f.price * f.qty, 0) / fs.reduce((s, f) => s + f.qty, 0) : null;
+  b.entries = entries;
+  b.pos = { contract: L.contract, contractId: L.contractId, productId: L.productId, tickSize: L.tickSize, valuePerPoint: L.valuePerPoint,
+            liquidatedNetPos: net, liquidatedNetPrice: avg(entries), exitAvgFillPrice: run === 0 ? avg(exits) : null,
+            timestamp: exits.length ? exits[exits.length - 1].ts : at, fromFills: true };
+}
+
+// How the position closed: "with a profit", "with a smaller loss" (than the floating loss) or neither
+function fmllClosed(b) {
+  const x = exitPLOf(b.pos);
+  return x == null ? null : x > 0 ? "profit" : x > b.alert.openPL ? "smaller" : null;
+}
+const ticketOpener = ticket => ticket ? `Following up on your recent ticket ${ticket} regarding the issue, we have reviewed it and are here to assist you further.\n\n` : "";
+
+// Highest balance at the breach = MLL level + trailing drawdown (e.g. 49,493 + 1,500 = 50,993)
+const fmllHigh = (b, mll) => mll.error ? null : cents(b.alert.level + mll.limit);
+// Detailed macro when the account had gone into profit (the limit trailed up from a new high); short one when the highest
+// balance is still the starting balance (losing from the start). Starting balance = trailingMaxDrawdownLimit (account size).
+const fmllInProfit = (b, mll) => { const h = fmllHigh(b, mll); return h != null && mll.threshold != null && h > mll.threshold; };
+const fmllDefaultVariant = (b, mll) => fmllInProfit(b, mll) ? "detailed" : "short";
+
+function buildFmllMacro(b, mll, variant = fmllDefaultVariant(b, mll), ticket = "") {
+  if (variant === "detailed") return buildFmllMacroDetailed(b, mll, ticket);
+  const p = b.pos, side = p.liquidatedNetPos > 0 ? "Buy" : "Sell", ent = b.entries || [];
+  const days = [...new Set(ent.map(f => fmtCT(f.ts).slice(0, 10)))];
+  const when = days.length === 1 ? `on ${days[0]} at ${ent.map(f => fmtCT(f.ts).slice(11)).join(" & ")} CT`
+    : `at ${ent.map(f => fmtCT(f.ts)).join(" & ")} CT`;
+  const closed = { profit: " with a profit", smaller: " with a slightly smaller loss" }[fmllClosed(b)] || "";
+  const final = mll.error ? "[final closed balance]" : "$" + money(mll.cash);
+  return ticketOpener(ticket) + `After a thorough investigation of your account and a review of the backend logs, we can confirm that the breach was ` +
+    `triggered by the unrealized floating PnL on your last ${side} trade on ${p.contract}, rather than your final closed balance. ` +
+    `Our automated risk management system continuously monitors accounts based on live floating equity, meaning risk limits ` +
+    `apply while trades are active and fluctuating in the live market.\n\n` +
+    `Your account breach was triggered during your active ${side} trade of ${Math.abs(p.liquidatedNetPos)} ${p.contract} contracts, ` +
+    `filled ${when}. At the moment of execution, your balance stood at $${money(b.alert.cash)} after deducting all fees (exchange, ` +
+    `clearing, NFA, and commission). While the position was open, the market moved against you, and your unrealized floating PnL ` +
+    `reached a loss of $(${money(b.alert.openPL)}). This specific floating drawdown caused your live equity to dip directly below ` +
+    `the maximum loss limit threshold.\n\n` +
+    `Although the position was later closed${closed}, leaving your account with a final ` +
+    `closed balance of ${final}, the hard breach had already mathematically occurred the exact millisecond your live floating ` +
+    `equity violated the risk parameters. The system correctly acted upon a valid live floating equity calculation. ` +
+    `Therefore, the account status is valid.`;
+}
+
+// Detailed version: also explains the threshold (highest balance − limit) and the balance just before the trade
+function buildFmllMacroDetailed(b, mll, ticket = "") {
+  const p = b.pos, side = p.liquidatedNetPos > 0 ? "buy" : "sell", ent = b.entries || [];
+  const high = fmllHigh(b, mll), lvl = "$" + money(b.alert.level);
+  const highTxt = high == null ? "[highest balance]" : "$" + money(high);
+  const prior = b.priorBalance == null ? "[balance before the trade]" : "$" + money(b.priorBalance);
+  const also = b.priorBalance != null && high != null && b.priorBalance === high ? "also " : "";
+  const closed = { profit: " with a profit", smaller: " with a smaller realized loss" }[fmllClosed(b)] || "";
+  const final = mll.error ? "[final closed balance]" : "$" + money(mll.cash);
+  return ticketOpener(ticket) + `After a thorough investigation of your account and a review of the backend logs, we can confirm that the breach was ` +
+    `triggered by the unrealized floating PnL on your last ${side} trade on ${p.contract}, rather than your final closed balance. ` +
+    `Our automated risk management system continuously monitors accounts based on live floating equity, meaning risk limits ` +
+    `apply while trades are active and fluctuating in the live market.\n\n` +
+    `In a trailing drawdown system, your Maximum Loss Limit threshold is calculated dynamically from your highest recorded ` +
+    `balance or equity. For your account, the highest recorded balance reached ${highTxt}, which set your strict Maximum Loss ` +
+    `Limit threshold at ${lvl}. Just prior to your final trade, your account balance was ${also}resting at ${prior}.\n\n` +
+    `The breach occurred when you placed a ${side} trade for ${Math.abs(p.liquidatedNetPos)} contract(s) on ${p.contract} on ` +
+    `${ent.map(f => fmtCT(f.ts)).join(" & ")} CT. While the position was open, the market moved against you, and your unrealized ` +
+    `floating PnL reached a loss of $(${money(b.alert.openPL)}). This specific floating drawdown caused your live equity to dip ` +
+    `directly below your trailing limit threshold of ${lvl}.\n\n` +
+    `Although the position was later closed${closed}, leaving your account with a final ` +
+    `closed balance of ${final}, the hard breach had already mathematically occurred the exact millisecond your live floating ` +
+    `equity violated the risk parameters. Because the system correctly acted upon a valid live floating equity calculation, ` +
+    `the account status is valid.`;
+}
+
+// ================= Auto-detect =================
+// Works out the case category of every liquidation by reusing the three tabs' own checks unchanged
+// (lookupLiquidations + analyze = Illiquid tab, ntpCheck = Non-tradable tab, mllCheck = Trailing MLL tab),
+// so every result can be cross-checked against the matching tab.
+const TRIGGER_LABEL = { trailingDrawdown: "Trailing max loss", dailyLoss: "Daily loss limit", weeklyLoss: "Weekly loss limit",
+  dailyProfit: "Daily profit limit", weeklyProfit: "Weekly profit limit", marginPercent: "Margin" };
+
+function classify(e, mll, pending) {
+  const t = e.triggers, userSet = /permissioned user/.test(e.alertText || "");
+  if (e.ntp.verdict === "NTP MATCH")
+    return { cat: "Non-tradable period", verdict: "MATCH", macro: "ntp", tab: "Non-tradable period", reasons: e.ntp.reasons };
+  if (e.ill?.verdict === "ILLIQUID MATCH")
+    return { cat: "Illiquid contract", verdict: "MATCH", macro: "illiquid", tab: "Illiquid contract", reasons: e.ill.reasons };
+  if (e.ill?.verdict === "REVIEW")
+    return { cat: "Illiquid contract?", verdict: "REVIEW", macro: "illiquid", tab: "Illiquid contract", reasons: e.ill.reasons };
+  if (e.illiquidCandidate && pending)
+    return { cat: "Checking illiquid…", verdict: "PENDING", reasons: ["Checking contract volume and fills…"] };
+  const extra = e.ill ? e.ill.reasons.map(r => "Illiquid check: " + r) : [];
+  // Floating only when the final closed balance did NOT breach too; otherwise the regular Trailing MLL macro applies
+  if (e.fm?.floating && !mll.valid) {
+    const a = e.fm.alert, sp = e.fm.spike ? spikeNote(e.fm) : null, doubt = e.fm.spike && !e.fm.spikeConfirmed;
+    return { cat: doubt ? "Floating MLL? (price spike)" : "Floating MLL", verdict: doubt ? "REVIEW" : "MATCH", macro: "fmll", tab: "Floating MLL", reasons: [
+      ...(sp ? [sp] : []),
+      `Trigger: trailing drawdown at ${fmtCT(e.liq.timestamp)} CT. Live equity (net liq) $${money(a.netLiq)} was at or below the MLL level $${money(a.level)}.`,
+      `Cash balance $${money(a.cash)} was still above the level: the breach came from the open loss of $(${money(a.openPL)}).`,
+      ...(e.fm.pos ? (e.fm.pos.fromFills ? ["No liquidation closed the position (the trader closed it), so it was rebuilt from the fills."] : [])
+                   : [pending ? "Rebuilding the position from the fills…" : "Couldn't work out the open position at the breach from the fills: check the macro's trade details."]), ...extra] };
+  }
+  if (t.includes("trailingDrawdown")) {
+    if (mll.error) return { cat: "Trailing MLL", verdict: "REVIEW", tab: "Trailing MLL", reasons: [mll.error, ...extra] };
+    const r = [`Trigger: trailing drawdown. Highest balance $${money(mll.high)} − current balance $${money(mll.cash)} = $${money(mll.diff)} vs limit $${money(mll.limit)}.`];
+    return mll.valid ? { cat: "Trailing MLL", verdict: "MATCH", macro: "mll", tab: "Trailing MLL", reasons: [...r, ...extra] }
+      : { cat: "Trailing MLL", verdict: "REVIEW", tab: "Trailing MLL", reasons: [...r, "The difference is below the limit with today's balances: check manually.", ...extra] };
+  }
+  if (e.ntp.verdict === "REVIEW") return { cat: "Non-tradable period?", verdict: "REVIEW", tab: "Non-tradable period", reasons: [...e.ntp.reasons, ...extra] };
+  if (e.closesBreach?.floating && !mll.valid)
+    return { cat: "Floating MLL (position closed)", verdict: "INFO", tab: "Floating MLL",
+             reasons: [`This closed the position after the floating MLL breach at ${fmtCT(e.closesBreach.event.liq.timestamp)} CT. Use the breach row for the macro.`, ...extra] };
+  if (!t.length && !e.alertText) return { cat: "Unknown", verdict: "REVIEW", reasons: ["No auto-liq alert found for this liquidation.", ...extra] };
+  const label = t.map(x => TRIGGER_LABEL[x] || x).join(" + ") || "Auto-liq profile";
+  return { cat: label + (userSet ? " (set by trader)" : ""), verdict: "INFO",
+           reasons: [`Trigger: ${label}${userSet ? ", a limit the trader set themselves" : ""}. No macro template for this category yet.`, ...extra] };
+}
+
+async function detectCheck(auth, name, onUpdate = () => {}) {
+  onUpdate({ step: "Looking up the account, liquidations, alerts and balances…" });
+  const [lk, ntp, mll] = await Promise.all([lookupLiquidations(auth, name), ntpCheck(auth, name),
+                                            mllCheck(auth, name).catch(e => ({ error: e.message }))]);
+  if (!lk.acct) throw new Error(`No demo, live or archived account named ${name}.`);
+  const events = joinLiqAlerts(lk, ntp);
+  events.forEach(e => {
+    const liq = e.liq;
+    const loss = (liq.liquidatedNetPrice - liq.marketPriceSnapshot) * liq.liquidatedNetPos * liq.valuePerPoint;
+    const gapTicks = Math.abs(liq.marketPriceSnapshot - liq.liquidatedNetPrice) / liq.tickSize;
+    // Same preconditions the Illiquid tab needs for a match, so no possible illiquid case is skipped
+    e.illiquidCandidate = e.ntp.verdict !== "NTP MATCH" && loss > 0 && gapTicks >= MIN_GAP_TICKS;
+  });
+  // Floating MLL breaches (same logic as the Floating MLL tab): mark the breach and the liquidation that closed its position
+  for (const b of floatingBreaches(events)) {
+    b.event.fm = b;
+    const closer = b.pos && b.pos !== b.event.liq && events.find(x => x.liq === b.pos);
+    if (closer) closer.closesBreach = b;
+  }
+  const result = (pending) => {
+    events.forEach(e => e.c = classify(e, mll, pending));
+    return { acct: lk.acct, events, mll, pending };
+  };
+  const cands = events.filter(e => e.illiquidCandidate);
+  const fmNeed = events.filter(e => e.fm?.floating).map(e => e.fm);
+  const scanLiqs = [...new Set([...cands.map(e => e.liq), ...fmNeed.map(b => b.pos || b.event.liq)])];
+  if (!scanLiqs.length) return result(false);
+  onUpdate({ ...result(true), step: cands.length
+    ? `Checking contract volume for ${cands.length} possible illiquid liquidation(s) (about 45 seconds)…`
+    : "Fetching the entry fills of the position (about 45 seconds)…" });
+  const rows = flattenFills(await bq(auth, fillsSql(lk.acct.side), fillsParams(lk.acct, scanLiqs)));
+  cands.forEach(e => e.ill = analyze(e.liq, rows));
+  fmNeed.forEach(b => fmllEnrich(b, rows));
+  const spikes = fmNeed.filter(b => b.spike);
+  if (spikes.length) {
+    onUpdate({ ...result(true), step: "Checking the market price around the breach (about 45 seconds)…" });
+    await Promise.all(spikes.map(b => checkSpike(auth, lk.acct.side, b)));
+  }
+  return result(false);
+}
+
+// The liquidation the macro is for: earliest illiquid match, else non-tradable, else MLL, else review, else the latest
+function detectFocus(events) {
+  for (const m of ["illiquid", "ntp", "fmll", "mll"]) {
+    const i = events.findIndex(e => e.c.verdict === "MATCH" && e.c.macro === m);
+    if (i >= 0) return i;
+  }
+  const r = events.findIndex(e => e.c.verdict === "REVIEW");
+  return r >= 0 ? r : events.length - 1;
+}
+
+function detectMacro(e, mll, ticket, variant) {
+  if (e.c.macro === "illiquid") return { plain: e.ill.macro, text: FAQ_TEXT, url: FAQ_URL };
+  if (e.c.macro === "ntp") return { plain: buildNtpMacro(ticket), text: NTP_FAQ_TEXT, url: NTP_FAQ_URL };
+  if (e.c.macro === "mll") return { plain: buildMllMacro(mll, ticket), text: MLL_FAQ_TEXT, url: MLL_FAQ_URL };
+  if (e.c.macro === "fmll" && e.fm.pos && e.fm.entries)
+    return { plain: buildFmllMacro(e.fm, mll, variant || fmllDefaultVariant(e.fm, mll), ticket), text: null, url: null };
+  return null;
+}
+
+function buildMllMacro(r, ticket) {
+  const t = ticket ? ` ${ticket}` : "";
+  return `Following up on your recent ticket${t} regarding the issue, we have reviewed it and are here to assist you further.\n\n` +
+    `Based on the report from your account ${r.acct.name}, your overall recorded loss exceeded the trailing maximum loss limit, ` +
+    `which led to the liquidation. Kindly note that in the trailing drawdown system, the loss limit is counted from the highest ` +
+    `recorded balance/equity. Your recorded highest balance was $${money(r.high)}, and the current balance is $${money(r.cash)}; ` +
+    `the difference exceeds the maximum loss limit according to the account size.\n\n` +
+    `I’ve attached a screenshot reflecting this for your reference.\n\n` +
+    `For further clarification, please go through this FAQ: ${MLL_FAQ_TEXT} (${MLL_FAQ_URL})`;
+}
+</script>
+
+<!-- Key is loaded from a separate private file so this page stays safe to share -->
+<script src="bigquery_key.private.js"></script>
+<script>
+// ---- UI
+const $ = id => document.getElementById(id);
+let key = null, token = null;
+const auth = async () => {
+  if (!token || token.exp < Date.now() / 1000) token = await getToken(key);
+  return token.value;
+};
+const setStatus = id => (msg, err) => { $(id).textContent = msg; $(id).className = "status" + (err ? " err" : ""); };
+const status = setStatus("status"), mStatus = setStatus("m-status"), nStatus = setStatus("n-status"), aStatus = setStatus("a-status"),
+      fStatus = setStatus("f-status");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function ready() {
+  $("keyCard").classList.add("hidden");
+  $("go").disabled = $("m-go").disabled = $("n-go").disabled = $("a-go").disabled = $("f-go").disabled = false;
+  status("Ready."); mStatus("Ready."); nStatus("Ready."); aStatus("Ready."); fStatus("Ready.");
+  $("a-acct").focus();
+}
+
+$("keyFile").addEventListener("change", async e => {
+  try {
+    const k = JSON.parse(await e.target.files[0].text());
+    if (!k.private_key || !k.client_email) throw new Error("That file isn't a service-account key.");
+    key = k; token = null;
+    await auth();
+    ready();
+  } catch (ex) { key = null; status(ex.message, true); }
+});
+
+// Use the key file next to this page automatically; the picker is only a fallback
+if (window.SA_KEY) {
+  key = window.SA_KEY;
+  ready();
+} else {
+  status("Key file bigquery_key.private.js not found next to this page. Load the key manually.", true);
+  mStatus("Load the key file first."); nStatus("Load the key file first."); aStatus("Load the key file first.");
+  fStatus("Load the key file first.");
+}
+
+// Tabs
+document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === b));
+  ["auto", "illiquid", "mll", "fmll", "ntp"].forEach(t => $("tab-" + t).classList.toggle("hidden", t !== b.dataset.tab));
+  $({ auto: "a-acct", illiquid: "acct", mll: "m-acct", fmll: "f-acct", ntp: "n-acct" }[b.dataset.tab]).focus();
+}));
+
+// Top progress bar. Checks don't report a real percentage, so each status step sets a target and the bar eases
+// toward it over that step's usual duration (it never quite stops, so a long step doesn't look frozen).
+const PHASES = [   // [status text match, bar target %, usual seconds]; first match wins
+  [/^Looking up the account, balances and loss limit/, 90, 18],           // Trailing MLL: lookup is the whole check
+  [/^Looking up the account, liquidations and auto-liq alerts/, 90, 25],  // Non-tradable: same
+  [/^Looking up/, 30, 15],
+  [/contract volume|entry fills/, 85, 60],
+  [/market price/, 95, 45],
+];
+const progress = (() => {
+  const el = $("progress"), fill = el.querySelector(".fill");
+  let val = 0, from = 0, target = 0, tau = 1, t0 = 0, raf = 0, hideT = 0;
+  const draw = () => { fill.style.width = val + "%"; el.setAttribute("aria-valuenow", Math.round(val)); };
+  const tick = () => {
+    const t = (performance.now() - t0) / 1000;
+    val = from + (target - from) * (1 - Math.exp(-t / tau));
+    draw(); raf = requestAnimationFrame(tick);
+  };
+  const phase = (pct, secs) => { from = val; target = Math.max(pct, val); tau = Math.max(secs / 2.5, 0.5); t0 = performance.now(); };
+  return {
+    start() { clearTimeout(hideT); cancelAnimationFrame(raf); el.classList.remove("err"); val = 0; draw();
+              el.classList.add("on"); phase(12, 4); raf = requestAnimationFrame(tick); },
+    step(msg) { const p = PHASES.find(([re]) => re.test(msg || "")); if (p) phase(p[1], p[2]); },
+    end(failed) { cancelAnimationFrame(raf); el.classList.toggle("err", !!failed); val = 100; draw();
+                  hideT = setTimeout(() => { el.classList.remove("on"); setTimeout(() => { if (!el.classList.contains("on")) { val = 0; draw(); } }, 650); }, 350); },
+  };
+})();
+// Status setter that also moves the progress bar
+const tracked = setter => m => { setter(m); progress.step(m); };
+
+// Copy a macro as rich text (link stays clickable) with a plain-text fallback
+async function copyRich(el, btn) {
+  try {
+    await navigator.clipboard.write([new ClipboardItem({
+      "text/html": new Blob([el.innerHTML], { type: "text/html" }),
+      "text/plain": new Blob([el.dataset.plain], { type: "text/plain" }) })]);
+  } catch {  // fallback: copy the rendered selection, which keeps the link
+    const range = document.createRange(); range.selectNodeContents(el);
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    document.execCommand("copy"); sel.removeAllRanges();
+  }
+  btn.textContent = "Copied"; setTimeout(() => btn.textContent = "Copy macro", 1500);
+}
+
+// ---- Auto-detect tab
+["a-acct", "a-ticket"].forEach(id => $(id).addEventListener("keydown", e => {
+  if (e.key === "Enter" && !$("a-go").disabled) $("a-go").click();
+}));
+
+let aState = null;
+$("a-go").addEventListener("click", async () => {
+  const name = $("a-acct").value.trim();
+  if (!name) return;
+  $("a-go").disabled = true; $("a-out").classList.add("hidden"); aState = null;
+  let failed = false; progress.start();
+  try {
+    const r = await detectCheck(auth, name, u => {   // progress: show early results while the illiquid check runs
+      tracked(aStatus)(u.step);
+      if (u.events) showDetect(u);
+    });
+    if (!r.events.length) { aStatus(`${r.acct.name} has no auto-liquidations.`); return; }
+    showDetect(r);
+    aStatus("");
+  } catch (ex) { failed = true; aStatus(ex.message, true); }
+  finally { $("a-go").disabled = false; progress.end(failed); }
+});
+$("a-ticket").addEventListener("input", () => { if (aState) showDetectEvent(aState.sel, aState.variant); });
+$("a-variant").addEventListener("change", () => { if (aState) showDetectEvent(aState.sel, $("a-variant").value); });
+$("a-copy").addEventListener("click", () => copyRich($("a-macro"), $("a-copy")));
+
+const AB = { MATCH: "bad", REVIEW: "warn", INFO: "good", PENDING: "warn" };
+
+function showDetect(r) {
+  const keep = aState && aState.r.acct.id === r.acct.id && !aState.r.pending ? aState.sel : null;
+  aState = { r, sel: null };
+  const focus = r.pending ? null : detectFocus(r.events);
+  const top = focus == null ? null : r.events[focus];
+  const [cls, text] = r.pending ? ["warn", "Checking…"]
+    : top.c.verdict === "MATCH" ? ["bad", `Valid: ${top.c.cat}`]
+    : r.events.some(e => e.c.verdict === "REVIEW") ? ["warn", "Needs review"] : ["good", "No case with a macro found"];
+  $("a-verdict").className = "verdict " + cls; $("a-verdict").textContent = text;
+  const n = r.events[0]?.liq.n_liqs || 0;
+  $("a-headline").innerHTML = `<b>${esc(r.acct.name)}</b> (${esc(r.acct.side)}) · ${r.events.length} liquidation(s)` +
+    (n > r.events.length ? ` (most recent ${r.events.length} of ${n})` : "");
+  $("a-events").innerHTML = `<tr><th>Liquidated (CT)</th><th>Contract</th><th class=n>Position</th><th>Trigger</th><th>Case</th></tr>` +
+    r.events.map((e, i) => `<tr data-i="${i}"><td>${esc(fmtCT(e.liq.timestamp))}</td><td>${esc(e.liq.contract)}</td>` +
+      `<td class=n>${e.liq.liquidatedNetPos ? `${e.liq.liquidatedNetPos > 0 ? "+" : ""}${e.liq.liquidatedNetPos} @ ${e.liq.liquidatedNetPrice}` : "—"}</td>` +
+      `<td>${esc(e.triggers.join(", ") || "—")}</td><td><span class="badge ${AB[e.c.verdict]}">${esc(e.c.cat)}</span></td></tr>`).join("");
+  $("a-events").querySelectorAll("tr[data-i]").forEach(tr => tr.addEventListener("click", () => showDetectEvent(+tr.dataset.i)));
+  showDetectEvent(keep ?? focus ?? r.events.length - 1);
+  $("a-out").classList.remove("hidden");
+}
+
+function showDetectEvent(i, variant) {
+  const { r } = aState; aState.sel = i;
+  const e = r.events[i];
+  // Floating MLL macro version: the case's default unless the dropdown was changed for this liquidation
+  const isFm = e.c.macro === "fmll" && e.fm?.entries;
+  aState.variant = isFm ? (variant || fmllDefaultVariant(e.fm, r.mll)) : undefined;
+  $("a-variant").classList.toggle("hidden", !isFm);
+  if (isFm) $("a-variant").value = aState.variant;
+  $("a-events").querySelectorAll("tr[data-i]").forEach(tr => tr.classList.toggle("sel", +tr.dataset.i === i));
+  $("a-evTitle").innerHTML = `${esc(e.liq.contract)} liquidation at ${esc(fmtCT(e.liq.timestamp))} CT · <span class="${AB[e.c.verdict]}">${esc(e.c.cat)}</span>`;
+  $("a-reasons").innerHTML = e.c.reasons.map(x => `<li>${esc(x)}</li>`).join("");
+  $("a-cross").textContent = e.c.tab ? `To double-check, run this account in the “${e.c.tab}” tab.` : "";
+  const m = e.c.verdict === "PENDING" ? null : detectMacro(e, r.mll, $("a-ticket").value.trim().replace(/^#/, ""), aState.variant);
+  $("a-macroCard").classList.toggle("hidden", !m);
+  if (m) {
+    $("a-macroFor").textContent = `· ${e.c.cat}, for the ${e.liq.contract} liquidation at ${fmtCT(e.liq.timestamp)} CT` +
+      (e.c.verdict === "REVIEW" ? " · not a clear match, read the reasons first" : "");
+    $("a-macro").innerHTML = macroHtml(m.plain, m.text, m.url);
+    $("a-macro").dataset.plain = m.plain;
+  }
+}
+
+// ---- Floating MLL tab
+["f-acct", "f-ticket"].forEach(id => $(id).addEventListener("keydown", e => {
+  if (e.key === "Enter" && !$("f-go").disabled) $("f-go").click();
+}));
+$("f-ticket").addEventListener("input", () => { if (fState) renderFmllMacro(fState.b, fState.mll, $("f-variant").value); });
+
+$("f-go").addEventListener("click", async () => {
+  const name = $("f-acct").value.trim();
+  if (!name) return;
+  $("f-go").disabled = true; $("f-out").classList.add("hidden");
+  let failed = false; progress.start();
+  try {
+    const r = await fmllCheck(auth, name, tracked(fStatus));
+    showFmll(r);
+    fStatus("");
+  } catch (ex) { failed = true; fStatus(ex.message, true); }
+  finally { $("f-go").disabled = false; progress.end(failed); }
+});
+
+$("f-copy").addEventListener("click", () => copyRich($("f-macro"), $("f-copy")));
+let fState = null;
+$("f-variant").addEventListener("change", () => { if (fState) renderFmllMacro(fState.b, fState.mll, $("f-variant").value); });
+
+function renderFmllMacro(b, mll, variant) {
+  const plain = buildFmllMacro(b, mll, variant, $("f-ticket").value.trim().replace(/^#/, ""));
+  $("f-macro").innerHTML = macroHtml(plain, null, null);
+  $("f-macro").dataset.plain = plain;
+}
+
+function showFmll(r) {
+  const b = r.breaches.find(x => x.floating) || r.breaches[0];
+  const closedAlso = !!r.mll.valid;   // final closed balance breached as well → the regular Trailing MLL macro applies
+  const floatingCase = b && b.floating && !closedAlso;
+  const [cls, text] = !b ? ["good", "No trailing-drawdown breach with a recorded MLL level found"]
+    : floatingCase && b.spike && !b.spikeConfirmed ? ["warn", "Floating MLL breach, but check for a price spike first"]
+    : floatingCase ? ["bad", "Valid: floating MLL breach"]
+    : b.floating ? ["warn", "Floating breach, but the final closed balance also breached the limit: use the Trailing MLL tab's macro"]
+    : ["warn", "MLL breach, but not floating: the cash balance itself was at or below the level (use the Trailing MLL tab)"];
+  $("f-verdict").className = "verdict " + cls; $("f-verdict").textContent = text;
+  $("f-headline").innerHTML = `<b>${esc(r.acct.name)}</b> (${esc(r.acct.side)}) · ${r.events.length} liquidation(s)` +
+    (r.breaches.length > 1 ? ` · ${r.breaches.length} drawdown breaches, showing ${b.floating ? "the floating one" : "the first"}` : "");
+  $("f-table").innerHTML = ""; $("f-reasons").innerHTML = "";
+  $("f-macroCard").classList.add("hidden");
+  if (b) {
+    const a = b.alert, p = b.pos, exitPL = p ? exitPLOf(p) : null;
+    const rows = [
+      ["Breach (trailing drawdown alert)", fmtCT(b.event.liq.timestamp) + " CT"],
+      ["MLL level", "$" + money(a.level)],
+      ["Cash balance at breach", "$" + money(a.cash)],
+      ["Open (floating) P/L at breach", (a.openPL < 0 ? "−" : "") + "$" + money(a.openPL)],
+      ["Live equity (net liq) at breach", "$" + money(a.netLiq)],
+      ["Live equity ≤ MLL level, cash > level?", b.floating ? "Yes" : "No"],
+    ];
+    if (p) {
+      rows.push(["Position" + (p.fromFills ? " (rebuilt from fills)" : ""), `${p.liquidatedNetPos > 0 ? "Buy" : "Sell"} ${Math.abs(p.liquidatedNetPos)} ${p.contract} @ ${+p.liquidatedNetPrice.toFixed(4)}`]);
+      if (b.entries) rows.push(["Filled at", b.entries.map(f => `${fmtCT(f.ts)} (${f.action} ${f.qty} @ ${f.price})`).join(" & ") + " CT"]);
+      if (b.breachPrice != null) rows.push(["Price at breach (implied by the open loss)", b.breachPrice.toFixed(2)]);
+      rows.push([p.fromFills ? "Closed by the trader at" : "Closed at", p.exitAvgFillPrice == null ? "Not closed within the data window"
+        : `${fmtCT(p.timestamp)} CT @ ${+p.exitAvgFillPrice.toFixed(4)}` + (exitPL == null ? "" : ` (P/L ${exitPL < 0 ? "−" : ""}$${money(exitPL)} before fees)`)]);
+    }
+    const high = fmllHigh(b, r.mll);
+    if (high != null) rows.push(["Highest balance at breach (MLL level + limit)", "$" + money(high)]);
+    if (r.mll.threshold != null) rows.push(["Starting balance (account size)", "$" + money(r.mll.threshold)]);
+    if (high != null && r.mll.threshold != null) rows.push(["Account went into profit before the breach?", fmllInProfit(b, r.mll) ? "Yes → detailed macro" : "No → short macro"]);
+    if (b.priorBalance != null) rows.push(["Balance just before the trade (previous balance − this trade's commission)", "$" + money(b.priorBalance)]);
+    if (!r.mll.error) rows.push([`Final closed balance (as of ${r.mll.cashDate})`, "$" + money(r.mll.cash)]);
+    $("f-table").innerHTML = rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td class=n><b>${esc(v)}</b></td></tr>`).join("");
+    const notes = [];
+    if (b.spike) notes.push(spikeNote(b));
+    if (b.floating && !p) notes.push("Couldn't work out the open position at the breach from the fills: fill in the trade details yourself.");
+    if (p?.fromFills) notes.push("No liquidation closed this position (the trader closed it), so it was rebuilt from the account's fills.");
+    if (r.mll.error) notes.push(r.mll.error + " The macro's final balance is left as a placeholder.");
+    if (b.floating && exitPL != null && exitPL < 0 && exitPL <= a.openPL) notes.push("The closed loss was not smaller than the floating loss, so the macro leaves out “with a smaller loss”.");
+    $("f-reasons").innerHTML = notes.map(x => `<li>${esc(x)}</li>`).join("");
+    if (floatingCase && p && b.entries) {
+      fState = { b, mll: r.mll };
+      $("f-variant").value = fmllDefaultVariant(b, r.mll);
+      renderFmllMacro(b, r.mll, $("f-variant").value);
+      $("f-macroCard").classList.remove("hidden");
+    }
+  }
+  $("f-out").classList.remove("hidden");
+}
+
+// ---- Non-tradable period tab
+["n-acct", "n-ticket"].forEach(id => $(id).addEventListener("keydown", e => {
+  if (e.key === "Enter" && !$("n-go").disabled) $("n-go").click();
+}));
+
+$("n-go").addEventListener("click", async () => {
+  const name = $("n-acct").value.trim(), ticket = $("n-ticket").value.trim().replace(/^#/, "");
+  if (!name) return;
+  $("n-go").disabled = true; $("n-out").classList.add("hidden");
+  let failed = false; progress.start();
+  try {
+    const r = await ntpCheck(auth, name, tracked(nStatus));
+    if (!r.events.length) { nStatus(`${r.acct.name} has no auto-liquidations.`); return; }
+    showNtp(r, ticket);
+    nStatus("");
+  } catch (ex) { failed = true; nStatus(ex.message, true); }
+  finally { $("n-go").disabled = false; progress.end(failed); }
+});
+
+$("n-copy").addEventListener("click", () => copyRich($("n-macro"), $("n-copy")));
+
+function showNtp(r, ticket) {
+  const NB = { "NTP MATCH": ["bad", "Non-tradable period"], "NOT A MATCH": ["good", "Outside window"], "REVIEW": ["warn", "Review"] };
+  const n = r.events.filter(e => e.verdict === "NTP MATCH").length, rev = r.events.some(e => e.verdict === "REVIEW");
+  const [cls, text] = n ? ["bad", `Valid: closed in the non-tradable period (${n} of ${r.events.length} liquidations)`]
+    : rev ? ["warn", "Needs review"] : ["good", "Not a non-tradable period case"];
+  $("n-verdict").className = "verdict " + cls; $("n-verdict").textContent = text;
+  $("n-headline").innerHTML = `<b>${esc(r.acct.name)}</b> (${esc(r.acct.side)}) · ${r.events.length} liquidation(s)`;
+  $("n-events").innerHTML = `<tr><th>Liquidated (CT)</th><th>Contract</th><th class=n>Position</th><th class=n>Open P/L</th><th>Trigger</th><th>Result</th></tr>` +
+    r.events.map(e => {
+      const [c, t] = NB[e.verdict];
+      return `<tr><td>${esc(fmtCT(e.timestamp))}</td><td>${esc(e.contract)}</td>` +
+        `<td class=n>${e.liquidatedNetPos > 0 ? "+" : ""}${e.liquidatedNetPos} @ ${e.liquidatedNetPrice}</td>` +
+        `<td class=n>${e.openPL < 0 ? "−" : ""}$${money(e.openPL)}</td><td>${esc(e.triggers.join(", ") || "—")}</td>` +
+        `<td><span class="badge ${c}">${t}</span></td></tr>`;
+    }).join("");
+  $("n-reasons").innerHTML = r.events.filter(e => e.verdict !== "NOT A MATCH")
+    .flatMap(e => e.reasons).map(x => `<li>${esc(x)}</li>`).join("");
+  $("n-macroCard").classList.toggle("hidden", !r.valid);
+  const plain = buildNtpMacro(ticket);
+  $("n-macro").innerHTML = macroHtml(plain, NTP_FAQ_TEXT, NTP_FAQ_URL);
+  $("n-macro").dataset.plain = plain;
+  $("n-out").classList.remove("hidden");
+}
+
+// ---- Trailing MLL tab
+["m-acct", "m-ticket"].forEach(id => $(id).addEventListener("keydown", e => {
+  if (e.key === "Enter" && !$("m-go").disabled) $("m-go").click();
+}));
+
+$("m-go").addEventListener("click", async () => {
+  const name = $("m-acct").value.trim(), ticket = $("m-ticket").value.trim().replace(/^#/, "");
+  if (!name) return;
+  $("m-go").disabled = true; $("m-out").classList.add("hidden");
+  let failed = false; progress.start();
+  try {
+    const r = await mllCheck(auth, name, tracked(mStatus));
+    showMll(r, ticket);
+    mStatus("");
+  } catch (ex) { failed = true; mStatus(ex.message, true); }
+  finally { $("m-go").disabled = false; progress.end(failed); }
+});
+
+$("m-copy").addEventListener("click", () => copyRich($("m-macro"), $("m-copy")));
+
+function showMll(r, ticket) {
+  $("m-verdict").className = "verdict " + (r.valid ? "bad" : "good");
+  $("m-verdict").textContent = r.valid ? "Valid breach" : "Not a breach";
+  $("m-headline").innerHTML = `<b>${esc(r.acct.name)}</b> (${esc(r.acct.side)})` + (r.mode ? ` · trailing mode ${esc(r.mode)}` : "");
+  $("m-table").innerHTML = [
+    ["Highest recorded balance (maxNetLiq)", "$" + money(r.high)],
+    [`Current balance (as of ${r.cashDate})`, "$" + money(r.cash)],
+    ["Difference", "$" + money(r.diff)],
+    ["Maximum loss limit (trailingMaxDrawdown)", "$" + money(r.limit)],
+    ["Difference ≥ limit?", r.valid ? "Yes" : "No"],
+  ].map(([k, v]) => `<tr><td>${esc(k)}</td><td class=n><b>${esc(v)}</b></td></tr>`).join("");
+  $("m-macroCard").classList.toggle("hidden", !r.valid);
+  const plain = buildMllMacro(r, ticket);
+  $("m-macro").innerHTML = macroHtml(plain, MLL_FAQ_TEXT, MLL_FAQ_URL);
+  $("m-macro").dataset.plain = plain;
+  $("m-out").classList.remove("hidden");
+}
+
+$("acct").addEventListener("keydown", e => { if (e.key === "Enter" && !$("go").disabled) $("go").click(); });
+
+$("go").addEventListener("click", async () => {
+  const name = $("acct").value.trim();
+  if (!name) return;
+  $("go").disabled = true; $("out").classList.add("hidden");
+  let failed = false; progress.start();
+  try {
+    const { acct, events } = await runCheck(auth, name, tracked(status));
+    if (!events.length) { status(`${acct.name} has no auto-liquidations.`); return; }
+    show(acct, events);
+    status("");
+  } catch (ex) { failed = true; status(ex.message, true); }
+  finally { $("go").disabled = false; progress.end(failed); }
+});
+
+$("copy").addEventListener("click", () => copyRich($("macro"), $("copy")));
+
+// ---- "Get Tradovate chart" (Illiquid tab only). The page can't run local programs, so it downloads a small
+// request file to ~/Downloads; the background helper (watch_charts.py) builds the chart PNG and opens it.
+let chartReq = null;
+const ctStamp = d => { const p = ctParts(d); return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`; };
+const cStatus = setStatus("chartStatus");
+
+const CHART_SERVER = "https://nonprinting-beauish-erinn.ngrok-free.dev";
+
+$("getChart").addEventListener("click", async () => {
+  if (!chartReq) return;
+  $("getChart").disabled = true;
+  cStatus(`Generating ${chartReq.contract} chart… (~30 seconds)`);
+  try {
+    const r = await fetch(CHART_SERVER + "/chart", {
+      method: "POST",
+      headers: { "content-type": "application/json", "ngrok-skip-browser-warning": "1" },
+      body: JSON.stringify(chartReq)
+    });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); cStatus("Chart error: " + (j.error || r.status), true); return; }
+    const blob = await r.blob();
+    const fname = `illiquid_chart_${chartReq.contract}_${chartReq.fill.replace(/[^0-9]/g, "")}.png`;
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fname;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    cStatus("Chart downloaded.");
+  } catch (e) {
+    cStatus("Chart server unreachable — make sure the server + ngrok tunnel are running: " + e.message, true);
+  } finally {
+    $("getChart").disabled = false;
+  }
+});
+
+const BADGE = { "ILLIQUID MATCH": ["bad", "Illiquid"], "NOT A MATCH": ["good", "Valid liquidation"], "REVIEW": ["warn", "Review"] };
+
+function show(acct, events) {
+  const illiquid = events.filter(e => e.res.verdict === "ILLIQUID MATCH");
+  const review = events.filter(e => e.res.verdict === "REVIEW");
+  const [cls, text] = illiquid.length ? ["bad", `Valid: illiquid contract (${illiquid.length} of ${events.length} liquidations)`]
+    : review.length ? ["warn", "Needs review"] : ["good", "Not illiquid: all liquidations were in the active month"];
+  $("verdict").className = "verdict " + cls; $("verdict").textContent = text;
+  const n = events[0].liq.n_liqs;
+  $("headline").innerHTML = `<b>${esc(acct.name)}</b> (${esc(acct.side)}) · ${events.length} liquidation(s)` +
+    (n > events.length ? ` (most recent ${events.length} of ${n})` : "");
+  $("events").innerHTML = `<tr><th>Liquidated (CT)</th><th>Contract</th><th class=n>Position</th><th class=n>Last price</th><th>Result</th></tr>` +
+    events.map(({ liq, res }, i) => {
+      const [c, t] = BADGE[res.verdict];
+      return `<tr data-i="${i}"><td>${esc(fmtCT(liq.timestamp))}</td><td>${esc(liq.contract)}</td>` +
+        `<td class=n>${liq.liquidatedNetPos > 0 ? "+" : ""}${liq.liquidatedNetPos} @ ${liq.liquidatedNetPrice}</td>` +
+        `<td class=n>${liq.marketPriceSnapshot}</td><td><span class="badge ${c}">${t}</span></td></tr>`;
+    }).join("");
+  $("events").querySelectorAll("tr[data-i]").forEach(tr => tr.addEventListener("click", () => showEvent(events, +tr.dataset.i)));
+  showEvent(events, focusIndex(events));
+  $("out").classList.remove("hidden");
+}
+
+function showEvent(events, i) {
+  const { liq, res: r } = events[i];
+  $("events").querySelectorAll("tr[data-i]").forEach(tr => tr.classList.toggle("sel", +tr.dataset.i === i));
+  const [c, t] = BADGE[r.verdict];
+  $("evTitle").innerHTML = `${esc(liq.contract)} liquidation at ${esc(fmtCT(liq.timestamp))} CT · <span class="${c}">${t}</span>`;
+  $("reasons").innerHTML = r.reasons.map(x => `<li>${esc(x)}</li>`).join("");
+  $("macroFor").textContent = `· for the ${liq.contract} liquidation at ${fmtCT(liq.timestamp)} CT` +
+    (events.filter(e => e.res.verdict === "ILLIQUID MATCH").length > 1 ? " (click another illiquid row to switch)" : "");
+
+  const showMacro = r.verdict !== "NOT A MATCH";
+  $("macroCard").classList.toggle("hidden", !showMacro);
+  $("macroWarn").classList.toggle("hidden", r.verdict !== "REVIEW");
+  $("macro").innerHTML = macroHtml(r.macro);
+  $("macro").dataset.plain = r.macro;
+  // Remember what the "Get Tradovate chart" button should request for this liquidation
+  const entry = r.fills[0];
+  chartReq = entry ? { contract: liq.contract, fill: ctStamp(entry.ts),
+    price: entry.price, side: liq.liquidatedNetPos > 0 ? "Buy" : "Sell" } : null;
+  $("getChart").classList.toggle("hidden", !chartReq);
+  $("chartStatus").textContent = "";
+
+  $("kv").innerHTML = [
+    ["Traded month share", (r.share * 100).toFixed(2) + "%"],
+    ["Loss at last price", "$" + money(r.loss)],
+    ["Loss at actual exit", r.realLoss == null ? "—" : "$" + money(r.realLoss)],
+    ["Price gap", Math.round(r.gapTicks).toLocaleString() + " ticks"],
+  ].map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join("");
+  const tot = r.total || 1;
+  $("volTable").innerHTML = `<tr><th>Contract · firm-wide volume on ${esc(r.td)}</th><th class=n>Qty</th><th class=n>Share</th></tr>` +
+    Object.entries(r.vol).sort((a, b) => b[1] - a[1]).map(([c, q]) =>
+      `<tr${c === r.traded ? " class=hl" : ""}><td>${esc(c)}</td><td class=n>${q.toLocaleString()}</td><td class=n>${(q / tot * 100).toFixed(2)}%</td></tr>`).join("");
+  $("fillTable").innerHTML = `<tr><th>Entry fill (CT)</th><th>Action</th><th class=n>Qty</th><th class=n>Price</th></tr>` +
+    r.fills.map(f => `<tr><td>${esc(fmtCT(f.ts))}</td><td>${esc(f.action)}</td><td class=n>${f.qty}</td><td class=n>${f.price}</td></tr>`).join("");
+  $("details").open = r.verdict !== "ILLIQUID MATCH";
+}
+</script>
+</body>
+</html>
