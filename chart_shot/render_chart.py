@@ -41,7 +41,7 @@ def render(contract, fill_ct, entry_price, side, bars, out, pre=22, post=58):
     li_v = li - a
     right_edge = li_v + post + 1        # always extend this far right, even past the data — empty = illiquid
 
-    fig, ax = plt.subplots(figsize=(13, 7), dpi=150)
+    fig, ax = plt.subplots(figsize=(13, 10), dpi=150)
     fig.patch.set_facecolor(BG); ax.set_facecolor(BG)
     for s in ax.spines.values(): s.set_color(GRID)
     ax.tick_params(colors=AXFG, labelsize=8.5, length=0)
@@ -81,7 +81,7 @@ def render(contract, fill_ct, entry_price, side, bars, out, pre=22, post=58):
     ax.set_xticks(ticks)
     ax.set_xticklabels([view[i]["t"].strftime("%-m/%-d %-I:%M%p").lower() for i in ticks])
     ax.set_xlim(-1, right_edge); ax.yaxis.tick_right(); ax.yaxis.set_label_position("right")
-    ax.margins(y=0.08)
+    ax.margins(y=0.04)
 
     # time pill under the crosshair on the x axis
     trans = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
