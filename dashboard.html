@@ -522,20 +522,23 @@ async function mllCheck(auth, name, onStep = () => {}) {
   const { acct, rows: [v] } = await bothSides(auth, name, s => `
     WITH ${acctCte(s)},
     cb AS (SELECT accountId, tradeDate, amount FROM ${T(s + "_cashBalances")} WHERE accountId IN (SELECT id FROM acct)
-           QUALIFY ROW_NUMBER() OVER (ORDER BY tradeDate DESC) = 1)
+           QUALIFY ROW_NUMBER() OVER (ORDER BY tradeDate DESC) = 1),
+    hnl AS (SELECT accountId, tradeDate FROM ${T(s + "_cashBalances")} WHERE accountId IN (SELECT id FROM acct)
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY accountId ORDER BY amount DESC, tradeDate DESC) = 1)
     SELECT acct.id accountId, acct.name accountName, acct.arch, al.trailingMaxDrawdown, al.trailingMaxDrawdownLimit,
-           al.trailingMaxDrawdownMode, rs.maxNetLiq, cb.tradeDate cashDate, cb.amount cash
+           al.trailingMaxDrawdownMode, rs.maxNetLiq, cb.tradeDate cashDate, cb.amount cash, hnl.tradeDate highDate
     FROM acct
     LEFT JOIN ${T(s + "_userAccountAutoLiqs")} al ON al.id = acct.id
     LEFT JOIN ${T(s + "_accountRiskStatuses")} rs ON rs.id = acct.id
-    LEFT JOIN cb ON cb.accountId = acct.id`);
+    LEFT JOIN cb ON cb.accountId = acct.id
+    LEFT JOIN hnl ON hnl.accountId = acct.id`);
   if (!acct) throw new Error(`No demo, live or archived account named ${name}.`);
   const missing = [["trailingMaxDrawdown", "loss limit"], ["maxNetLiq", "highest balance"], ["cash", "current balance"]]
     .filter(([k]) => v[k] == null).map(([, label]) => label);
   if (missing.length) throw new Error(`No ${missing.join(", ")} found for ${acct.name}. The account may be outside the data retention window.`);
   const high = cents(v.maxNetLiq), cash = cents(v.cash), limit = cents(v.trailingMaxDrawdown);
   const diff = cents(high - cash);
-  return { acct, high, cash, cashDate: v.cashDate, limit, diff, mode: v.trailingMaxDrawdownMode,
+  return { acct, high, cash, cashDate: v.cashDate, highDate: v.highDate, limit, diff, mode: v.trailingMaxDrawdownMode,
            threshold: v.trailingMaxDrawdownLimit, valid: diff >= limit };
 }
 
@@ -908,10 +911,11 @@ function detectMacro(e, mll, ticket, variant) {
 
 function buildMllMacro(r, ticket) {
   const t = ticket ? ` ${ticket}` : "";
+  const highDateTxt = r.highDate ? ` on ${r.highDate.replace(/^(\d{4})-(\d{2})-(\d{2})$/, "$2/$3/$1")}` : "";
   return `Following up on your recent ticket${t} regarding the issue, we have reviewed it and are here to assist you further.\n\n` +
     `Based on the report from your account ${r.acct.name}, your overall recorded loss exceeded the trailing maximum loss limit, ` +
     `which led to the liquidation. Kindly note that in the trailing drawdown system, the loss limit is counted from the highest ` +
-    `recorded balance/equity. Your recorded highest balance was $${money(r.high)}, and the current balance is $${money(r.cash)}; ` +
+    `recorded balance/equity. Your recorded highest EOD balance was $${money(r.high)}${highDateTxt}, and the current balance is $${money(r.cash)}; ` +
     `the difference exceeds the maximum loss limit according to the account size.\n\n` +
     `I’ve attached a screenshot reflecting this for your reference.\n\n` +
     `For further clarification, please go through this FAQ: ${MLL_FAQ_TEXT} (${MLL_FAQ_URL})`;
@@ -1236,7 +1240,7 @@ function showMll(r, ticket) {
   $("m-verdict").textContent = r.valid ? "Valid breach" : "Not a breach";
   $("m-headline").innerHTML = `<b>${esc(r.acct.name)}</b> (${esc(r.acct.side)})` + (r.mode ? ` · trailing mode ${esc(r.mode)}` : "");
   $("m-table").innerHTML = [
-    ["Highest recorded balance (maxNetLiq)", "$" + money(r.high)],
+    [`Highest recorded EOD balance (maxNetLiq)${r.highDate ? " on " + r.highDate.replace(/^(\d{4})-(\d{2})-(\d{2})$/, "$2/$3/$1") : ""}`, "$" + money(r.high)],
     [`Current balance (as of ${r.cashDate})`, "$" + money(r.cash)],
     ["Difference", "$" + money(r.diff)],
     ["Maximum loss limit (trailingMaxDrawdown)", "$" + money(r.limit)],
