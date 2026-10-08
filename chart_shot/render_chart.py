@@ -5,7 +5,7 @@ on the last traded bar before the fill, that bar's OHLC box top-left, and the ti
 """
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import matplotlib
@@ -32,7 +32,7 @@ def _ampm(dt):
 
 def render(contract, fill_ct, entry_price, side, bars, out, pre=12, post=30):
     for x in bars:
-        x["t"] = datetime.fromisoformat(x["timestamp"].replace("Z", "+00:00")).astimezone(CT)
+        x["t"] = datetime.fromisoformat(x["timestamp"].replace("Z", "+00:00")).astimezone(CT) - timedelta(minutes=1)
     bars.sort(key=lambda x: x["t"])
     li = max(i for i, x in enumerate(bars) if x["t"] <= fill_ct)      # last traded bar at/before the fill
     a = max(0, li - pre)
