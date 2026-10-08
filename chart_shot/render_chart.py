@@ -30,7 +30,7 @@ def _ampm(dt):
     return f"{dt.month:02d}/{dt.day:02d}/{dt.year} {h}:{dt.minute:02d}:{dt.second:02d} {'am' if dt.hour < 12 else 'pm'}"
 
 
-def render(contract, fill_ct, entry_price, side, bars, out, pre=30, post=78):
+def render(contract, fill_ct, entry_price, side, bars, out, pre=22, post=58):
     for x in bars:
         x["t"] = datetime.fromisoformat(x["timestamp"].replace("Z", "+00:00")).astimezone(CT)
     bars.sort(key=lambda x: x["t"])
@@ -66,13 +66,13 @@ def render(contract, fill_ct, entry_price, side, bars, out, pre=30, post=78):
     ax.add_patch(Rectangle((li_v - 0.5, stale["low"] - pad), 1, stale["high"] - stale["low"] + 2 * pad,
                            fill=False, edgecolor=HILITE, lw=1.3, zorder=5))
 
-    # OHLC box, top-left, Tradovate-style
-    lines = [f"{stale['t']:%m/%d/%Y %H:%M}", "",
+    # OHLC box, top-left, Tradovate-style — contract name added, red border
+    lines = [contract, f"{stale['t']:%m/%d/%Y %H:%M}", "",
              f"OPEN    {stale['open']:.{dp}f}", f"HIGH    {stale['high']:.{dp}f}",
              f"LOW     {stale['low']:.{dp}f}", f"CLOSE   {stale['close']:.{dp}f}", f"VOLUME  {vol}"]
     ax.text(0.011, 0.978, "\n".join(lines), transform=ax.transAxes, color="#e8e8ea", fontsize=10,
             family="monospace", va="top", ha="left", zorder=6,
-            bbox=dict(boxstyle="round,pad=0.55", facecolor=BOX_BG, edgecolor=BOX_BORDER, lw=1.1))
+            bbox=dict(boxstyle="round,pad=0.55", facecolor=BOX_BG, edgecolor=HILITE, lw=1.8))
 
     # x axis: a few date/time labels, price axis on the right
     # a few evenly-spaced, compact, non-overlapping time labels across the data region
@@ -86,7 +86,7 @@ def render(contract, fill_ct, entry_price, side, bars, out, pre=30, post=78):
     # time pill under the crosshair on the x axis
     trans = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
     ax.text(li_v, -0.085, _ampm(stale["t"]), transform=trans, color="#f0f0f0", fontsize=9, ha="center", va="top",
-            zorder=7, bbox=dict(boxstyle="round,pad=0.35", facecolor="#2a2d33", edgecolor="none"))
+            zorder=7, bbox=dict(boxstyle="round,pad=0.35", facecolor="#2a2d33", edgecolor=HILITE, lw=1.5))
 
     fig.tight_layout(rect=[0, 0.02, 1, 1])
     fig.savefig(out, facecolor=BG); plt.close(fig)
