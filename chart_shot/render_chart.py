@@ -32,7 +32,7 @@ def _ampm(dt):
 
 def render(contract, fill_ct, entry_price, side, bars, out, pre=12, post=30):
     for x in bars:
-        x["t"] = datetime.fromisoformat(x["timestamp"].replace("Z", "+00:00")).astimezone(CT) - timedelta(minutes=1)
+        x["t"] = datetime.fromisoformat(x["timestamp"].replace("Z", "+00:00")).astimezone(CT)
     bars.sort(key=lambda x: x["t"])
     li = max(i for i, x in enumerate(bars) if x["t"] <= fill_ct)      # last traded bar at/before the fill
     a = max(0, li - pre)
@@ -60,6 +60,7 @@ def render(contract, fill_ct, entry_price, side, bars, out, pre=12, post=30):
     stale = view[li_v]
     vol = stale.get("upVolume", 0) + stale.get("downVolume", 0)
     dp = 1 if stale["close"] >= 100 else 2
+    display_t = stale["t"] + timedelta(minutes=1)  # Tradovate labels bars by close minute
 
     # dashed crosshair on the stale bar
     ax.axvline(li_v, color=CROSS, ls=(0, (4, 3)), lw=0.8, zorder=4)
@@ -70,7 +71,7 @@ def render(contract, fill_ct, entry_price, side, bars, out, pre=12, post=30):
                            fill=False, edgecolor=HILITE, lw=1.3, zorder=5))
 
     # OHLC box, top-left, Tradovate-style — contract name added, red border
-    lines = [contract, f"{stale['t']:%m/%d/%Y %H:%M}", "",
+    lines = [contract, f"{display_t:%m/%d/%Y %H:%M}", "",
              f"OPEN    {stale['open']:.{dp}f}", f"HIGH    {stale['high']:.{dp}f}",
              f"LOW     {stale['low']:.{dp}f}", f"CLOSE   {stale['close']:.{dp}f}", f"VOLUME  {vol}"]
     ax.text(0.011, 0.978, "\n".join(lines), transform=ax.transAxes, color="#e8e8ea", fontsize=10,
@@ -88,7 +89,7 @@ def render(contract, fill_ct, entry_price, side, bars, out, pre=12, post=30):
 
     # time pill under the crosshair on the x axis
     trans = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
-    ax.text(li_v, -0.085, _ampm(stale["t"]), transform=trans, color="#f0f0f0", fontsize=9, ha="center", va="top",
+    ax.text(li_v, -0.085, _ampm(display_t), transform=trans, color="#f0f0f0", fontsize=9, ha="center", va="top",
             zorder=7, bbox=dict(boxstyle="round,pad=0.35", facecolor="#2a2d33", edgecolor=HILITE, lw=1.5))
 
     fig.tight_layout(rect=[0, 0.02, 1, 1])
