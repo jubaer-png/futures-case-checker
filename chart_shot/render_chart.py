@@ -30,7 +30,7 @@ def _ampm(dt):
     return f"{dt.month:02d}/{dt.day:02d}/{dt.year} {h}:{dt.minute:02d}:{dt.second:02d} {'am' if dt.hour < 12 else 'pm'}"
 
 
-def render(contract, fill_ct, entry_price, side, bars, out, pre=15, post=40):
+def render(contract, fill_ct, entry_price, side, bars, out, pre=12, post=30):
     for x in bars:
         x["t"] = datetime.fromisoformat(x["timestamp"].replace("Z", "+00:00")).astimezone(CT)
     bars.sort(key=lambda x: x["t"])
@@ -48,13 +48,13 @@ def render(contract, fill_ct, entry_price, side, bars, out, pre=15, post=40):
     ax.grid(True, color=GRID, lw=0.5)
 
     y_range = max(x["high"] for x in view) - min(x["low"] for x in view) or 1
-    min_body_h = y_range * 0.008   # minimum body = 0.8% of visible price range
+    min_body_h = y_range * 0.015   # minimum body = 1.5% of visible price range
 
     for i, x in enumerate(view):
         o, h, l, c = x["open"], x["high"], x["low"], x["close"]
         col = UP if c >= o else DOWN
-        ax.plot([i, i], [l, h], color=col, lw=2.0, zorder=2, solid_capstyle="round")
-        ax.add_patch(Rectangle((i - 0.38, min(o, c)), 0.76, max(abs(c - o), min_body_h),
+        ax.plot([i, i], [l, h], color=col, lw=3.0, zorder=2, solid_capstyle="round")
+        ax.add_patch(Rectangle((i - 0.42, min(o, c)), 0.84, max(abs(c - o), min_body_h),
                                facecolor=col, edgecolor=col, lw=0.4, zorder=3))
 
     stale = view[li_v]
