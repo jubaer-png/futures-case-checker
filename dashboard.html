@@ -749,8 +749,8 @@ function fmllClosed(b) {
 }
 const ticketOpener = ticket => ticket ? `Following up on your recent ticket ${ticket} regarding the issue, we have reviewed it and are here to assist you further.\n\n` : "";
 
-// Highest balance at the breach = MLL level + trailing drawdown (e.g. 49,493 + 1,500 = 50,993)
-const fmllHigh = (b, mll) => mll.error ? null : cents(b.alert.level + mll.limit);
+// Highest balance = maxNetLiq from accountRiskStatuses (the actual peak live equity the system recorded)
+const fmllHigh = (b, mll) => (!mll.error && mll.high != null) ? mll.high : null;
 // Detailed macro when the account had gone into profit (the limit trailed up from a new high); short one when the highest
 // balance is still the starting balance (losing from the start). Starting balance = trailingMaxDrawdownLimit (account size).
 const fmllInProfit = (b, mll) => { const h = fmllHigh(b, mll); return h != null && mll.threshold != null && h > mll.threshold; };
@@ -782,7 +782,8 @@ function buildFmllMacro(b, mll, variant = fmllDefaultVariant(b, mll), ticket = "
 // Detailed version: also explains the threshold (highest balance − limit) and the balance just before the trade
 function buildFmllMacroDetailed(b, mll, ticket = "") {
   const p = b.pos, side = p.liquidatedNetPos > 0 ? "buy" : "sell", ent = b.entries || [];
-  const high = fmllHigh(b, mll), lvl = "$" + money(b.alert.level);
+  const high = fmllHigh(b, mll);
+  const lvl = high != null ? "$" + money(high - mll.limit) : "$" + money(b.alert.level);
   const highTxt = high == null ? "[highest balance]" : "$" + money(high);
   const prior = b.priorBalance == null ? "[balance before the trade]" : "$" + money(b.priorBalance);
   const also = b.priorBalance != null && high != null && b.priorBalance === high ? "also " : "";
