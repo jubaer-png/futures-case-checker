@@ -802,8 +802,8 @@ function buildFmllMacroDetailed(b, mll, ticket = "") {
     `Limit threshold at ${lvl}. Just prior to your final trade, your account balance was ${also}resting at ${prior}.\n\n` +
     `The breach occurred when you placed a ${side} trade for ${Math.abs(p.liquidatedNetPos)} contract(s) on ${p.contract} on ` +
     `${ent.map(f => fmtCT(f.ts)).join(" & ")} CT. While the position was open, the market moved against you, and your unrealized ` +
-    `floating PnL reached a loss of $(${money(b.alert.openPL)}). This specific floating drawdown caused your live equity to dip ` +
-    `directly below your trailing limit threshold of ${lvl}.\n\n` +
+    `floating PnL reached a loss of $(${money(b.alert.openPL)}). This specific floating drawdown, combined with the transaction ` +
+    `fees on both sides, caused your live equity to fall below your trailing limit threshold of ${lvl}.\n\n` +
     `Although the position was later closed${closed}, leaving your account with a final ` +
     `closed balance of ${final}, the hard breach had already mathematically occurred the exact millisecond your live floating ` +
     `equity violated the risk parameters. Because the system correctly acted upon a valid live floating equity calculation, ` +
