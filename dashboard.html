@@ -706,11 +706,14 @@ async function lookupPriorBalance(auth, acct, b) {
   if (!b.entries || !b.entries.length) return;
   const firstTs = b.entries.reduce((m, f) => f.ts < m ? f.ts : m, b.entries[0].ts);
   const dtFmt = d => d.toISOString().slice(0, 23).replace("T", " ");  // "YYYY-MM-DD HH:MM:SS.mmm"
+  const td = tradeDateOf(firstTs);  // filter to just 1–2 days so we don't full-scan the table
   const [row] = await bq(auth,
     `SELECT amount FROM ${T(tbl(acct.side) + "_cashBalanceLogs")}
-     WHERE accountId = @aid AND timestamp < CAST(@ts AS DATETIME)
+     WHERE accountId = @aid
+       AND tradeDate BETWEEN DATE_SUB(@td, INTERVAL 1 DAY) AND @td
+       AND timestamp < CAST(@ts AS DATETIME)
      ORDER BY timestamp DESC LIMIT 1`,
-    { aid: acct.id, ts: { datetime: dtFmt(firstTs) } }).catch(() => []);
+    { aid: acct.id, td: { date: td }, ts: { datetime: dtFmt(firstTs) } }).catch(() => []);
   if (row) b.priorBalance = cents(row.amount);
 }
 
