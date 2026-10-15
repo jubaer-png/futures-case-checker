@@ -785,8 +785,12 @@ function buildFmllMacroDetailed(b, mll, ticket = "") {
   const high = fmllHigh(b, mll);
   const lvl = high != null ? "$" + money(high - mll.limit) : "$" + money(b.alert.level);
   const highTxt = high == null ? "[highest balance]" : "$" + money(high);
-  const prior = b.priorBalance == null ? "[balance before the trade]" : "$" + money(b.priorBalance);
-  const also = b.priorBalance != null && high != null && b.priorBalance === high ? "also " : "";
+  // Use mll.high as prior balance when the account was at its peak just before the trade
+  // (diff <= $100 means only entry fees were deducted; larger diff = balance had already dropped)
+  const rawPrior = b.priorBalance;
+  const priorVal = (rawPrior != null && high != null && high >= rawPrior && high - rawPrior <= 10000) ? high : rawPrior;
+  const prior = priorVal == null ? "[balance before the trade]" : "$" + money(priorVal);
+  const also = priorVal != null && high != null && priorVal === high ? "also " : "";
   const closed = { profit: " with a profit", smaller: " with a smaller realized loss" }[fmllClosed(b)] || "";
   const final = mll.error ? "[final closed balance]" : "$" + money(mll.cash);
   return ticketOpener(ticket) + `After a thorough investigation of your account and a review of the backend logs, we can confirm that the breach was ` +
@@ -906,7 +910,7 @@ function detectMacro(e, mll, ticket, variant) {
   if (e.c.macro === "ntp") return { plain: buildNtpMacro(ticket), text: NTP_FAQ_TEXT, url: NTP_FAQ_URL };
   if (e.c.macro === "mll") return { plain: buildMllMacro(mll, ticket), text: MLL_FAQ_TEXT, url: MLL_FAQ_URL };
   if (e.c.macro === "fmll" && e.fm.pos && e.fm.entries)
-    return { plain: buildFmllMacro(e.fm, mll, variant || fmllDefaultVariant(e.fm, mll), ticket), text: null, url: null };
+    return { plain: buildFmllMacro(e.fm, mll, variant || fmllDefaultVariant(e.fm, mll), ticket), text: MLL_FAQ_TEXT, url: MLL_FAQ_URL };
   return null;
 }
 
