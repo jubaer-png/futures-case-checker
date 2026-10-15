@@ -390,11 +390,11 @@ function fillsSql(side) {
       WHERE m.productId IN UNNEST(@pids)
         AND DATE(m.expirationDate) BETWEEN DATE_SUB(@tdMin, INTERVAL 10 DAY) AND DATE_ADD(@tdMax, INTERVAL 400 DAY)),
     f AS (
-      SELECT contractId, orderId, timestamp, action, qty, price, tradeDate, accountId FROM ${T("base_" + t + "_fills")}
+      SELECT contractId, orderId, timestamp, action, qty, price, commission, tradeDate, accountId FROM ${T("base_" + t + "_fills")}
       WHERE tradeDate BETWEEN DATE_SUB(@tdMin, INTERVAL 1 DAY) AND @tdMax AND contractId IN (SELECT id FROM sib))
     SELECT f.tradeDate, s.productId, s.name contract, f.contractId, SUM(f.qty) qty,
       ARRAY_AGG(IF(f.accountId = @aid AND f.contractId IN UNNEST(@cids),
-        STRUCT(f.orderId, f.timestamp AS ts, f.action, f.qty, f.price), NULL) IGNORE NULLS) acct
+        STRUCT(f.orderId, f.timestamp AS ts, f.action, f.qty, f.price, f.commission), NULL) IGNORE NULLS) acct
     FROM f JOIN sib s ON f.contractId = s.id
     GROUP BY 1, 2, 3, 4`;
 }
@@ -690,7 +690,8 @@ const exitPLOf = p => p.exitAvgFillPrice == null ? null : (p.exitAvgFillPrice - 
 function fmllEnrich(b, rows) {
   if (!b.pos) posFromFills(b, rows);
   if (b.pos && !b.entries) b.entries = analyze(b.pos, rows).fills;
-  b.priorBalance = b.alert.cash == null ? null : cents(b.alert.cash);
+  const entryComm = b.entries ? b.entries.reduce((s, f) => s + (f.commission || 0), 0) : 0;
+  b.priorBalance = b.alert.cash == null ? null : cents(b.alert.cash + entryComm);
   // Price at the breach implied by the open P/L. Far from both the entry and the close = possible price spike.
   if (b.pos && b.pos.exitAvgFillPrice != null) {
     const p = b.pos, tick = b.event.liq.tickSize || p.tickSize;
@@ -788,14 +789,10 @@ function buildFmllMacro(b, mll, variant = fmllDefaultVariant(b, mll), ticket = "
 function buildFmllMacroDetailed(b, mll, ticket = "") {
   const p = b.pos, side = p.liquidatedNetPos > 0 ? "buy" : "sell", ent = b.entries || [];
   const high = fmllHigh(b, mll);
-  const lvl = high != null ? "$" + money(high - mll.limit) : "$" + money(b.alert.level);
+  const lvl = "$" + money(b.alert.level);
   const highTxt = high == null ? "[highest balance]" : "$" + money(high);
-  // Use mll.high as prior balance when the account was at its peak just before the trade
-  // (diff <= $100 means only entry fees were deducted; larger diff = balance had already dropped)
-  const rawPrior = b.priorBalance;
-  const priorVal = (rawPrior != null && high != null && high >= rawPrior && high - rawPrior <= 10000) ? high : rawPrior;
-  const prior = priorVal == null ? "[balance before the trade]" : "$" + money(priorVal);
-  const also = priorVal != null && high != null && priorVal === high ? "also " : "";
+  const prior = b.priorBalance == null ? "[balance before the trade]" : "$" + money(b.priorBalance);
+  const also = b.priorBalance != null ? "also " : "";
   const closed = { profit: " with a profit", smaller: " with a smaller realized loss" }[fmllClosed(b)] || "";
   const final = mll.error ? "[final closed balance]" : "$" + money(mll.cash);
   return ticketOpener(ticket) + `After a thorough investigation of your account and a review of the backend logs, we can confirm that the breach was ` +
