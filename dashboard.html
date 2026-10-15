@@ -390,11 +390,11 @@ function fillsSql(side) {
       WHERE m.productId IN UNNEST(@pids)
         AND DATE(m.expirationDate) BETWEEN DATE_SUB(@tdMin, INTERVAL 10 DAY) AND DATE_ADD(@tdMax, INTERVAL 400 DAY)),
     f AS (
-      SELECT contractId, orderId, timestamp, action, qty, price, commission, tradeDate, accountId FROM ${T("base_" + t + "_fills")}
+      SELECT contractId, orderId, timestamp, action, qty, price, tradeDate, accountId FROM ${T("base_" + t + "_fills")}
       WHERE tradeDate BETWEEN DATE_SUB(@tdMin, INTERVAL 1 DAY) AND @tdMax AND contractId IN (SELECT id FROM sib))
     SELECT f.tradeDate, s.productId, s.name contract, f.contractId, SUM(f.qty) qty,
       ARRAY_AGG(IF(f.accountId = @aid AND f.contractId IN UNNEST(@cids),
-        STRUCT(f.orderId, f.timestamp AS ts, f.action, f.qty, f.price, f.commission), NULL) IGNORE NULLS) acct
+        STRUCT(f.orderId, f.timestamp AS ts, f.action, f.qty, f.price), NULL) IGNORE NULLS) acct
     FROM f JOIN sib s ON f.contractId = s.id
     GROUP BY 1, 2, 3, 4`;
 }
@@ -673,6 +673,7 @@ async function fmllCheck(auth, name, onStep = () => {}) {
     onStep("Fetching the entry fills of the position (about 45 seconds)…");
     const rows = flattenFills(await bq(auth, fillsSql(lk.acct.side), fillsParams(lk.acct, need.map(b => b.pos || b.event.liq))));
     need.forEach(b => fmllEnrich(b, rows));
+    await Promise.all(need.map(b => lookupPriorBalance(auth, lk.acct, b)));
     const spikes = need.filter(b => b.spike);
     if (spikes.length) {
       onStep("Checking the market price around the breach (about 45 seconds)…");
@@ -684,14 +685,12 @@ async function fmllCheck(auth, name, onStep = () => {}) {
 
 const exitPLOf = p => p.exitAvgFillPrice == null ? null : (p.exitAvgFillPrice - p.liquidatedNetPrice) * p.liquidatedNetPos * p.valuePerPoint;
 
-// Entry fills of the breaching position + the balance just before it. Support's method: the cash balance after the previous
-// trade minus this trade's commissions. Tradovate deducts the commission at the entry fill, so that is exactly the
-// breach alert's "Total Cash" (e.g. FNFTCHKALEBLATKA46630: $49,919.76): always available, no extra query.
+// Entry fills of the breaching position. priorBalance (cash just before the first entry fill)
+// is resolved afterwards via lookupPriorBalance using demo_cashBalanceLogs.
 function fmllEnrich(b, rows) {
   if (!b.pos) posFromFills(b, rows);
   if (b.pos && !b.entries) b.entries = analyze(b.pos, rows).fills;
-  const entryComm = b.entries ? b.entries.reduce((s, f) => s + (f.commission || 0), 0) : 0;
-  b.priorBalance = b.alert.cash == null ? null : cents(b.alert.cash + entryComm);
+  b.priorBalance = b.alert.cash == null ? null : cents(b.alert.cash); // default; overridden by lookupPriorBalance
   // Price at the breach implied by the open P/L. Far from both the entry and the close = possible price spike.
   if (b.pos && b.pos.exitAvgFillPrice != null) {
     const p = b.pos, tick = b.event.liq.tickSize || p.tickSize;
@@ -699,6 +698,20 @@ function fmllEnrich(b, rows) {
     const off = x => Math.abs(b.breachPrice - x) / tick;
     b.spike = tick > 0 && off(p.liquidatedNetPrice) >= SPIKE_TICKS && off(p.exitAvgFillPrice) >= SPIKE_TICKS;
   }
+}
+
+// Look up the cash balance just before the first entry fill from cashBalanceLogs.
+// This gives the true pre-trade balance (before entry fees), not alert.cash which is hours-later post-fee.
+async function lookupPriorBalance(auth, acct, b) {
+  if (!b.entries || !b.entries.length) return;
+  const firstTs = b.entries.reduce((m, f) => f.ts < m ? f.ts : m, b.entries[0].ts);
+  const dtFmt = d => d.toISOString().slice(0, 23).replace("T", " ");  // "YYYY-MM-DD HH:MM:SS.mmm"
+  const [row] = await bq(auth,
+    `SELECT amount FROM ${T(tbl(acct.side) + "_cashBalanceLogs")}
+     WHERE accountId = @aid AND timestamp < CAST(@ts AS DATETIME)
+     ORDER BY timestamp DESC LIMIT 1`,
+    { aid: acct.id, ts: { datetime: dtFmt(firstTs) } }).catch(() => []);
+  if (row) b.priorBalance = cents(row.amount);
 }
 
 // When no liquidation row closed the position, rebuild it from the account's fills in the breached contract:
@@ -890,6 +903,7 @@ async function detectCheck(auth, name, onUpdate = () => {}) {
   const rows = flattenFills(await bq(auth, fillsSql(lk.acct.side), fillsParams(lk.acct, scanLiqs)));
   cands.forEach(e => e.ill = analyze(e.liq, rows));
   fmNeed.forEach(b => fmllEnrich(b, rows));
+  await Promise.all(fmNeed.map(b => lookupPriorBalance(auth, lk.acct, b)));
   const spikes = fmNeed.filter(b => b.spike);
   if (spikes.length) {
     onUpdate({ ...result(true), step: "Checking the market price around the breach (about 45 seconds)…" });
