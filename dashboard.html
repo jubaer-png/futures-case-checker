@@ -801,6 +801,19 @@ function buildFmllMacro(b, mll, variant = fmllDefaultVariant(b, mll), ticket = "
     `Therefore, the account status is valid.`;
 }
 
+// Deduplicate entry fills sharing the same formatted timestamp (partial fills of the same order)
+// and join with commas + " & " before the last, matching the reference macro format.
+const entTimes = ent => {
+  const uniq = [...new Set(ent.map(f => fmtCT(f.ts)))];
+  return uniq.length <= 1 ? (uniq[0] || "[trade time]")
+    : uniq.slice(0, -1).join(", ") + " & " + uniq[uniq.length - 1];
+};
+const entTxt = (ent, side, qty) => {
+  const uniq = [...new Set(ent.map(f => fmtCT(f.ts)))];
+  return uniq.length > 1 ? `${side} trades for ${qty} contracts`
+    : `a ${side} trade for ${qty} contract(s)`;
+};
+
 // Detailed version: also explains the threshold (highest balance − limit) and the balance just before the trade
 function buildFmllMacroDetailed(b, mll, ticket = "") {
   const p = b.pos, side = p.liquidatedNetPos > 0 ? "buy" : "sell", ent = b.entries || [];
@@ -811,15 +824,16 @@ function buildFmllMacroDetailed(b, mll, ticket = "") {
   const also = b.priorBalance != null ? "also " : "";
   const closed = { profit: " with a profit", smaller: " with a smaller realized loss" }[fmllClosed(b)] || "";
   const final = mll.error ? "[final closed balance]" : "$" + money(mll.cash);
+  const uniqEntTimes = [...new Set(ent.map(f => fmtCT(f.ts)))];
   return ticketOpener(ticket) + `After a thorough investigation of your account and a review of the backend logs, we can confirm that the breach was ` +
-    `triggered by the unrealized floating PnL on your last ${side} trade on ${p.contract}, rather than your final closed balance. ` +
+    `triggered by the unrealized floating PnL on your last ${side} trade${uniqEntTimes.length > 1 ? "s" : ""} on ${p.contract}, rather than your final closed balance. ` +
     `Our automated risk management system continuously monitors accounts based on live floating equity, meaning risk limits ` +
     `apply while trades are active and fluctuating in the live market.\n\n` +
     `In a trailing drawdown system, your Maximum Loss Limit threshold is calculated dynamically from your highest recorded ` +
     `balance or equity. For your account, the highest recorded balance reached ${highTxt}, which set your strict Maximum Loss ` +
     `Limit threshold at ${lvl}. Just prior to your final trade, your account balance was ${also}resting at ${prior}.\n\n` +
-    `The breach occurred when you placed a ${side} trade for ${Math.abs(p.liquidatedNetPos)} contract(s) on ${p.contract} on ` +
-    `${ent.map(f => fmtCT(f.ts)).join(" & ")} CT. While the position was open, the market moved against you, and your unrealized ` +
+    `The breach occurred when you placed ${entTxt(ent, side, Math.abs(p.liquidatedNetPos))} on ${p.contract} on ` +
+    `${entTimes(ent)} CT. While the position was open, the market moved against you, and your unrealized ` +
     `floating PnL reached a loss of $(${money(b.alert.openPL)}). This specific floating drawdown, combined with the transaction ` +
     `fees on both sides, caused your live equity to fall below your trailing limit threshold of ${lvl}.\n\n` +
     `Although the position was later closed${closed}, leaving your account with a final ` +
