@@ -819,7 +819,10 @@ function buildFmllMacroDetailed(b, mll, ticket = "") {
   const p = b.pos, side = p.liquidatedNetPos > 0 ? "buy" : "sell", ent = b.entries || [];
   const high = fmllHigh(b, mll);
   const lvl = "$" + money(b.alert.level);
-  const highTxt = high == null ? "[highest balance]" : "$" + money(high);
+  // Derive the peak from the alert level + drawdown limit: this is always internally consistent
+  // with the stated MLL threshold. mll.high (EOD max) can be inflated by the post-breach close.
+  const derivedHigh = (b.alert?.level != null && mll.limit != null && !mll.error) ? cents(b.alert.level + mll.limit) : null;
+  const highTxt = (derivedHigh ?? high) == null ? "[highest balance]" : "$" + money(derivedHigh ?? high);
   const prior = b.priorBalance == null ? "[balance before the trade]" : "$" + money(b.priorBalance);
   const also = b.priorBalance != null ? "also " : "";
   const closed = { profit: " with a profit", smaller: " with a smaller realized loss" }[fmllClosed(b)] || "";
