@@ -297,17 +297,22 @@ function parseCell(cell, field) {
 }
 
 // Run a query and return rows as objects. opts.dryRun returns {gb} instead.
+const BQ_POLL_MS = 90000;        // how long each poll waits for BQ before re-checking
+const BQ_TIMEOUT_MS = 3 * 60 * 1000;  // 3-minute hard cap before surfacing an error
+const BQ_POLL_RETRIES = 2;       // retries on transient network failures per poll attempt
+
 async function bq(auth, sql, params = {}, opts = {}) {
   const tok = await auth();
   const H = { authorization: "Bearer " + tok, "content-type": "application/json" };
   const base = `https://bigquery.googleapis.com/bigquery/v2/projects/${PROJECT}`;
   let r = await fetch(base + "/queries", { method: "POST", headers: H, body: JSON.stringify({
-    query: sql, useLegacySql: false, parameterMode: "NAMED", timeoutMs: 90000, dryRun: !!opts.dryRun,
+    query: sql, useLegacySql: false, parameterMode: "NAMED", timeoutMs: BQ_POLL_MS, dryRun: !!opts.dryRun,
     useQueryCache: !opts.dryRun, queryParameters: Object.entries(params).map(([k, v]) => param(k, v)) }) });
   let j = await r.json();
   if (j.error) throw new Error(j.error.message);
   if (opts.dryRun) return { gb: Number(j.totalBytesProcessed) / 1e9 };
   const { jobId, location } = j.jobReference;
+  const deadline = Date.now() + BQ_TIMEOUT_MS;
   let rows = [];
   while (true) {
     if (j.error) throw new Error(j.error.message);
@@ -316,9 +321,19 @@ async function bq(auth, sql, params = {}, opts = {}) {
       rows = rows.concat((j.rows || []).map(row => Object.fromEntries(row.f.map((c, i) => [f[i].name, parseCell(c, f[i])]))));
       if (!j.pageToken) break;
     }
-    const q = new URLSearchParams({ location, timeoutMs: "90000" });
+    if (Date.now() > deadline) throw new Error("Query timed out after 3 minutes. The BQ job is still running — try again; if it keeps timing out the scan may be unusually large.");
+    const q = new URLSearchParams({ location, timeoutMs: String(BQ_POLL_MS) });
     if (j.jobComplete && j.pageToken) q.set("pageToken", j.pageToken);
-    j = await (await fetch(`${base}/queries/${jobId}?${q}`, { headers: H })).json();
+    // Retry the poll on transient network failures without re-submitting the job
+    let attempt = 0, pollErr;
+    while (attempt <= BQ_POLL_RETRIES) {
+      try {
+        const tok2 = await auth();   // refresh token if it expired during a long scan
+        j = await (await fetch(`${base}/queries/${jobId}?${q}`, { headers: { ...H, authorization: "Bearer " + tok2 } })).json();
+        pollErr = null; break;
+      } catch (e) { pollErr = e; attempt++; }
+    }
+    if (pollErr) throw new Error("Lost connection to BigQuery during polling: " + pollErr.message);
   }
   return rows;
 }
@@ -570,7 +585,9 @@ async function ntpCheck(auth, name, onStep = () => {}) {
     l AS (SELECT id, accountId, contractId, timestamp, liquidatedNetPos, liquidatedNetPrice, marketPriceSnapshot, exitAvgFillPrice
           FROM ${T(s + "_autoLiqTransactions")} WHERE accountId IN (SELECT id FROM acct)
           QUALIFY ROW_NUMBER() OVER (ORDER BY timestamp DESC) <= ${MAX_LIQS}),
-    al AS (SELECT accountId, timestamp, text, meta FROM ${T(s + "_adminAlertSignals")} WHERE accountId IN (SELECT id FROM acct))
+    al AS (SELECT accountId, timestamp, text, meta FROM ${T(s + "_adminAlertSignals")} WHERE accountId IN (SELECT id FROM acct)
+           AND timestamp >= TIMESTAMP_SUB((SELECT MIN(timestamp) FROM l), INTERVAL 1 DAY)
+           AND timestamp <= TIMESTAMP_ADD((SELECT MAX(timestamp) FROM l), INTERVAL 1 DAY))
     SELECT acct.id accountId, acct.name accountName, acct.arch, l.id liqId, l.timestamp, l.liquidatedNetPos,
            l.liquidatedNetPrice, l.marketPriceSnapshot, l.exitAvgFillPrice, c.name contract, p.valuePerPoint,
            al.timestamp alertTs, al.text alertText, al.meta alertMeta
@@ -665,20 +682,27 @@ async function fmllCheck(auth, name, onStep = () => {}) {
   onStep("Looking up the account, liquidations, alerts and balances…");
   const [lk, ntp] = await Promise.all([lookupLiquidations(auth, name), ntpCheck(auth, name)]);
   if (!lk.acct) throw new Error(`No demo, live or archived account named ${name}.`);
-  const breachDate = floatingBreaches(joinLiqAlerts(lk, ntp)).map(b => tradeDateOf(b.event.liq.timestamp)).sort()[0] ?? null;
-  const mll = await mllCheck(auth, name, () => {}, breachDate).catch(e => ({ error: e.message }));
   const events = joinLiqAlerts(lk, ntp), breaches = floatingBreaches(events);
   const need = breaches.filter(b => b.floating);
+  const breachDate = breaches.map(b => tradeDateOf(b.event.liq.timestamp)).sort()[0] ?? null;
+  let mll;
   if (need.length) {
     onStep("Fetching the entry fills of the position (about 45 seconds)…");
-    const rows = flattenFills(await bq(auth, fillsSql(lk.acct.side), fillsParams(lk.acct, need.map(b => b.pos || b.event.liq))));
-    need.forEach(b => fmllEnrich(b, rows));
+    // mllCheck and fills scan are independent — run them in parallel
+    let fillRows;
+    [mll, fillRows] = await Promise.all([
+      mllCheck(auth, name, () => {}, breachDate).catch(e => ({ error: e.message })),
+      bq(auth, fillsSql(lk.acct.side), fillsParams(lk.acct, need.map(b => b.pos || b.event.liq))).then(flattenFills),
+    ]);
+    need.forEach(b => fmllEnrich(b, fillRows));
     await Promise.all(need.map(b => lookupPriorBalance(auth, lk.acct, b)));
     const spikes = need.filter(b => b.spike);
     if (spikes.length) {
       onStep("Checking the market price around the breach (about 45 seconds)…");
       await Promise.all(spikes.map(b => checkSpike(auth, lk.acct.side, b)));
     }
+  } else {
+    mll = await mllCheck(auth, name, () => {}, breachDate).catch(e => ({ error: e.message }));
   }
   return { acct: lk.acct, events, mll, breaches, valid: breaches.some(b => b.floating) };
 }
@@ -863,6 +887,8 @@ function classify(e, mll, pending) {
   if (e.illiquidCandidate && pending)
     return { cat: "Checking illiquid…", verdict: "PENDING", reasons: ["Checking contract volume and fills…"] };
   const extra = e.ill ? e.ill.reasons.map(r => "Illiquid check: " + r) : [];
+  // mll may still be loading when classify is called during an intermediate pending update
+  if (!mll) return { cat: "Checking…", verdict: "PENDING", reasons: ["Fetching account balance data…"] };
   // Floating only when the final closed balance did NOT breach too; otherwise the regular Trailing MLL macro applies
   if (e.fm?.floating && !mll.valid) {
     const a = e.fm.alert, sp = e.fm.spike ? spikeNote(e.fm) : null, doubt = e.fm.spike && !e.fm.spikeConfirmed;
@@ -893,8 +919,6 @@ async function detectCheck(auth, name, onUpdate = () => {}) {
   onUpdate({ step: "Looking up the account, liquidations, alerts and balances…" });
   const [lk, ntp] = await Promise.all([lookupLiquidations(auth, name), ntpCheck(auth, name)]);
   if (!lk.acct) throw new Error(`No demo, live or archived account named ${name}.`);
-  const breachDate = floatingBreaches(joinLiqAlerts(lk, ntp)).map(b => tradeDateOf(b.event.liq.timestamp)).sort()[0] ?? null;
-  const mll = await mllCheck(auth, name, () => {}, breachDate).catch(e => ({ error: e.message }));
   const events = joinLiqAlerts(lk, ntp);
   events.forEach(e => {
     const liq = e.liq;
@@ -904,23 +928,34 @@ async function detectCheck(auth, name, onUpdate = () => {}) {
     e.illiquidCandidate = e.ntp.verdict !== "NTP MATCH" && loss > 0 && gapTicks >= MIN_GAP_TICKS;
   });
   // Floating MLL breaches (same logic as the Floating MLL tab): mark the breach and the liquidation that closed its position
+  const breachDate = floatingBreaches(events).map(b => tradeDateOf(b.event.liq.timestamp)).sort()[0] ?? null;
   for (const b of floatingBreaches(events)) {
     b.event.fm = b;
     const closer = b.pos && b.pos !== b.event.liq && events.find(x => x.liq === b.pos);
     if (closer) closer.closesBreach = b;
   }
+  const cands = events.filter(e => e.illiquidCandidate);
+  const fmNeed = events.filter(e => e.fm?.floating).map(e => e.fm);
+  const scanLiqs = [...new Set([...cands.map(e => e.liq), ...fmNeed.map(b => b.pos || b.event.liq)])];
+  let mll;
   const result = (pending) => {
     events.forEach(e => e.c = classify(e, mll, pending));
     return { acct: lk.acct, events, mll, pending };
   };
-  const cands = events.filter(e => e.illiquidCandidate);
-  const fmNeed = events.filter(e => e.fm?.floating).map(e => e.fm);
-  const scanLiqs = [...new Set([...cands.map(e => e.liq), ...fmNeed.map(b => b.pos || b.event.liq)])];
-  if (!scanLiqs.length) return result(false);
+  if (!scanLiqs.length) {
+    // No fills scan needed — mllCheck alone, then done
+    mll = await mllCheck(auth, name, () => {}, breachDate).catch(e => ({ error: e.message }));
+    return result(false);
+  }
   onUpdate({ ...result(true), step: cands.length
     ? `Checking contract volume for ${cands.length} possible illiquid liquidation(s) (about 45 seconds)…`
     : "Fetching the entry fills of the position (about 45 seconds)…" });
-  const rows = flattenFills(await bq(auth, fillsSql(lk.acct.side), fillsParams(lk.acct, scanLiqs)));
+  // mllCheck and fills scan are independent — run them in parallel
+  let rows;
+  [mll, rows] = await Promise.all([
+    mllCheck(auth, name, () => {}, breachDate).catch(e => ({ error: e.message })),
+    bq(auth, fillsSql(lk.acct.side), fillsParams(lk.acct, scanLiqs)).then(flattenFills),
+  ]);
   cands.forEach(e => e.ill = analyze(e.liq, rows));
   fmNeed.forEach(b => fmllEnrich(b, rows));
   await Promise.all(fmNeed.map(b => lookupPriorBalance(auth, lk.acct, b)));
@@ -970,6 +1005,22 @@ function buildMllMacro(r, ticket) {
 // ---- UI
 const $ = id => document.getElementById(id);
 let key = null, token = null;
+
+// In-memory result cache — keyed by {fn}:{accountName}. Historical breach data never changes,
+// so a session-lifetime cache is safe. Cleared automatically when the page is refreshed.
+const _cache = new Map();
+const cacheKey = (fn, name) => `${fn}:${name.trim().toUpperCase()}`;
+const cached = (fn, name) => _cache.get(cacheKey(fn, name)) ?? null;
+const cacheSet = (fn, name, val) => { _cache.set(cacheKey(fn, name), val); return val; };
+// Wrap a check function: return cached result immediately if available, else run and cache.
+// Returns { result, fromCache } so callers can show a "Loaded from cache" notice.
+async function withCache(fn, name, runner) {
+  const hit = cached(fn, name);
+  if (hit) return { result: hit, fromCache: true };
+  const result = await runner();
+  cacheSet(fn, name, result);
+  return { result, fromCache: false };
+}
 const auth = async () => {
   if (!token || token.exp < Date.now() / 1000) token = await getToken(key);
   return token.value;
@@ -1069,13 +1120,13 @@ $("a-go").addEventListener("click", async () => {
   $("a-go").disabled = true; $("a-out").classList.add("hidden"); aState = null;
   let failed = false; progress.start();
   try {
-    const r = await detectCheck(auth, name, u => {   // progress: show early results while the illiquid check runs
+    const { result: r, fromCache: fc } = await withCache("detect", name, () => detectCheck(auth, name, u => {
       tracked(aStatus)(u.step);
       if (u.events) showDetect(u);
-    });
+    }));
     if (!r.events.length) { aStatus(`${r.acct.name} has no auto-liquidations.`); return; }
     showDetect(r);
-    aStatus("");
+    aStatus(fc ? "Loaded from cache." : "");
   } catch (ex) { failed = true; aStatus(ex.message, true); }
   finally { $("a-go").disabled = false; progress.end(failed); }
 });
@@ -1140,9 +1191,9 @@ $("f-go").addEventListener("click", async () => {
   $("f-go").disabled = true; $("f-out").classList.add("hidden");
   let failed = false; progress.start();
   try {
-    const r = await fmllCheck(auth, name, tracked(fStatus));
+    const { result: r, fromCache: fc } = await withCache("fmll", name, () => fmllCheck(auth, name, tracked(fStatus)));
     showFmll(r);
-    fStatus("");
+    fStatus(fc ? "Loaded from cache." : "");
   } catch (ex) { failed = true; fStatus(ex.message, true); }
   finally { $("f-go").disabled = false; progress.end(failed); }
 });
@@ -1223,10 +1274,10 @@ $("n-go").addEventListener("click", async () => {
   $("n-go").disabled = true; $("n-out").classList.add("hidden");
   let failed = false; progress.start();
   try {
-    const r = await ntpCheck(auth, name, tracked(nStatus));
+    const { result: r, fromCache: fc } = await withCache("ntp", name, () => ntpCheck(auth, name, tracked(nStatus)));
     if (!r.events.length) { nStatus(`${r.acct.name} has no auto-liquidations.`); return; }
     showNtp(r, ticket);
-    nStatus("");
+    nStatus(fc ? "Loaded from cache." : "");
   } catch (ex) { failed = true; nStatus(ex.message, true); }
   finally { $("n-go").disabled = false; progress.end(failed); }
 });
@@ -1268,9 +1319,9 @@ $("m-go").addEventListener("click", async () => {
   $("m-go").disabled = true; $("m-out").classList.add("hidden");
   let failed = false; progress.start();
   try {
-    const r = await mllCheck(auth, name, tracked(mStatus));
+    const { result: r, fromCache: fc } = await withCache("mll", name, () => mllCheck(auth, name, tracked(mStatus)));
     showMll(r, ticket);
-    mStatus("");
+    mStatus(fc ? "Loaded from cache." : "");
   } catch (ex) { failed = true; mStatus(ex.message, true); }
   finally { $("m-go").disabled = false; progress.end(failed); }
 });
@@ -1303,10 +1354,10 @@ $("go").addEventListener("click", async () => {
   $("go").disabled = true; $("out").classList.add("hidden");
   let failed = false; progress.start();
   try {
-    const { acct, events } = await runCheck(auth, name, tracked(status));
+    const { result: { acct, events }, fromCache: fc } = await withCache("illiquid", name, () => runCheck(auth, name, tracked(status)));
     if (!events.length) { status(`${acct.name} has no auto-liquidations.`); return; }
     show(acct, events);
-    status("");
+    status(fc ? "Loaded from cache." : "");
   } catch (ex) { failed = true; status(ex.message, true); }
   finally { $("go").disabled = false; progress.end(failed); }
 });
