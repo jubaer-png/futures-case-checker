@@ -771,8 +771,30 @@ function posFromFills(b, rows) {
   const L = b.event.liq, at = L.timestamp;
   const fills = rows.filter(r => r.kind === "acct" && r.contractId === L.contractId).sort((x, y) => x.ts - y.ts);
   const sgn = f => f.action === "Buy" ? f.qty : -f.qty;
-  const net = fills.filter(f => f.ts <= at).reduce((s, f) => s + sgn(f), 0);
-  if (!net) return;
+  const beforeAt = fills.filter(f => f.ts <= at);
+  const net = beforeAt.reduce((s, f) => s + sgn(f), 0);
+  if (!net) {
+    // pos=0: trader self-closed before auto-liq executed. Reconstruct the last position cycle.
+    let running = 0, lastNonZeroNet = 0, entryFs = [], exitFs = [], segStart = 0;
+    for (let i = 0; i < beforeAt.length; i++) {
+      const prev = running;
+      running += sgn(beforeAt[i]);
+      if (prev === 0 && running !== 0) segStart = i;
+      if (prev !== 0 && running === 0) {
+        lastNonZeroNet = prev;
+        const seg = beforeAt.slice(segStart, i + 1);
+        entryFs = seg.filter(f => Math.sign(sgn(f)) === Math.sign(lastNonZeroNet));
+        exitFs  = seg.filter(f => Math.sign(sgn(f)) !== Math.sign(lastNonZeroNet));
+      }
+    }
+    if (!lastNonZeroNet) return;
+    const avg = fs => fs.length ? fs.reduce((s, f) => s + f.price * f.qty, 0) / fs.reduce((s, f) => s + f.qty, 0) : null;
+    b.entries = entryFs;
+    b.pos = { contract: L.contract, contractId: L.contractId, productId: L.productId, tickSize: L.tickSize, valuePerPoint: L.valuePerPoint,
+              liquidatedNetPos: lastNonZeroNet, liquidatedNetPrice: avg(entryFs), exitAvgFillPrice: avg(exitFs),
+              timestamp: exitFs.length ? exitFs[exitFs.length - 1].ts : at, fromFills: true };
+    return;
+  }
   const pseudo = { liquidatedNetPos: net, timestamp: at, exitOrderId: null };
   const { fills: entries } = entryFills(fills, pseudo);
   let run = net; const exits = [];
