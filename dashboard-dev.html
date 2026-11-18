@@ -445,6 +445,24 @@ function fillsParams(acct, liqs) {
            tdMin: { date: tds[0] }, tdMax: { date: tds[tds.length - 1] }, aid: acct.id };
 }
 
+// Cheap account-only fills query for Floating MLL — skips firm-wide volume aggregation.
+// fmllEnrich/posFromFills only need this account's fills; the full fillsSql scans ~100 GB
+// for firm-wide volume that floating MLL never uses.
+function fmllFillsSql(side) {
+  const t = tbl(side);
+  return `SELECT contractId, orderId, timestamp AS ts, action, qty, price
+    FROM ${T("base_" + t + "_fills")}
+    WHERE accountId = @aid
+      AND contractId IN UNNEST(@cids)
+      AND tradeDate BETWEEN DATE_SUB(@tdMin, INTERVAL 1 DAY) AND @tdMax`;
+}
+function fmllFillsParams(acct, liqs) {
+  const tds = liqs.map(l => tradeDateOf(l.timestamp)).sort();
+  return { cids: [...new Set(liqs.map(l => l.contractId))],
+           tdMin: { date: tds[0] }, tdMax: { date: tds[tds.length - 1] }, aid: acct.id };
+}
+const flattenFmllFills = rows => rows.map(r => ({ kind: "acct", ...r }));
+
 // ---- analysis
 function entryFills(acctFills, liq) {
   const before = acctFills.filter(f => f.orderId !== liq.exitOrderId && f.ts <= liq.timestamp).sort((a, b) => a.ts - b.ts);
@@ -708,19 +726,21 @@ async function fmllCheck(auth, name, onStep = () => {}) {
   let mll;
   if (need.length) {
     onStep("Fetching the entry fills of the position (about 45 seconds)…");
-    // mllCheck and fills scan are independent — run them in parallel
+    // mllCheck and fills scan are independent — run them in parallel.
+    // fmllFillsSql only fetches this account's fills (no firm-wide volume), much cheaper than fillsSql.
     let fillRows;
     [mll, fillRows] = await Promise.all([
       mllCheck(auth, name, () => {}, breachDate).catch(e => ({ error: e.message })),
-      bq(auth, fillsSql(lk.acct.side), fillsParams(lk.acct, need.map(b => b.pos || b.event.liq))).then(flattenFills),
+      bq(auth, fmllFillsSql(lk.acct.side), fmllFillsParams(lk.acct, need.map(b => b.pos || b.event.liq))).then(flattenFmllFills),
     ]);
     need.forEach(b => fmllEnrich(b, fillRows));
-    await Promise.all(need.map(b => lookupPriorBalance(auth, lk.acct, b)));
+    // lookupPriorBalance and checkSpike are independent — run them in parallel
     const spikes = need.filter(b => b.spike);
-    if (spikes.length) {
-      onStep("Checking the market price around the breach (about 45 seconds)…");
-      await Promise.all(spikes.map(b => checkSpike(auth, lk.acct.side, b)));
-    }
+    if (spikes.length) onStep("Checking the market price around the breach (about 45 seconds)…");
+    await Promise.all([
+      Promise.all(need.map(b => lookupPriorBalance(auth, lk.acct, b))),
+      Promise.all(spikes.map(b => checkSpike(auth, lk.acct.side, b))),
+    ]);
   } else {
     mll = await mllCheck(auth, name, () => {}, breachDate).catch(e => ({ error: e.message }));
   }
@@ -992,20 +1012,24 @@ async function detectCheck(auth, name, onUpdate = () => {}) {
   onUpdate({ ...result(true), step: cands.length
     ? `Checking contract volume for ${cands.length} possible illiquid liquidation(s) (about 45 seconds)…`
     : "Fetching the entry fills of the position (about 45 seconds)…" });
-  // mllCheck and fills scan are independent — run them in parallel
+  // mllCheck and fills scan are independent — run them in parallel.
+  // When there are no illiquid candidates, use the cheap account-only fills query (no firm-wide volume needed).
   let rows;
   [mll, rows] = await Promise.all([
     mllCheck(auth, name, () => {}, breachDate).catch(e => ({ error: e.message })),
-    bq(auth, fillsSql(lk.acct.side), fillsParams(lk.acct, scanLiqs)).then(flattenFills),
+    cands.length
+      ? bq(auth, fillsSql(lk.acct.side), fillsParams(lk.acct, scanLiqs)).then(flattenFills)
+      : bq(auth, fmllFillsSql(lk.acct.side), fmllFillsParams(lk.acct, scanLiqs)).then(flattenFmllFills),
   ]);
   cands.forEach(e => e.ill = analyze(e.liq, rows));
   fmNeed.forEach(b => fmllEnrich(b, rows));
-  await Promise.all(fmNeed.map(b => lookupPriorBalance(auth, lk.acct, b)));
+  // lookupPriorBalance and checkSpike are independent — run them in parallel
   const spikes = fmNeed.filter(b => b.spike);
-  if (spikes.length) {
-    onUpdate({ ...result(true), step: "Checking the market price around the breach (about 45 seconds)…" });
-    await Promise.all(spikes.map(b => checkSpike(auth, lk.acct.side, b)));
-  }
+  if (spikes.length) onUpdate({ ...result(true), step: "Checking the market price around the breach (about 45 seconds)…" });
+  await Promise.all([
+    Promise.all(fmNeed.map(b => lookupPriorBalance(auth, lk.acct, b))),
+    Promise.all(spikes.map(b => checkSpike(auth, lk.acct.side, b))),
+  ]);
   return result(false);
 }
 
