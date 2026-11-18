@@ -46,6 +46,16 @@ tr.hl td{background:var(--hl)}
   box-shadow:0 0 10px var(--bar),0 0 4px var(--bar);border-radius:0 2px 2px 0;transition:width .3s ease-out}
 #progress.err .fill{--bar:#e5484d}
 @media (prefers-reduced-motion:reduce){#progress .fill{transition:none}}
+/* Circular progress overlay */
+#ring-overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:50;pointer-events:none;opacity:0;transition:opacity .25s ease}
+#ring-overlay.on{opacity:1}
+.ring-track{fill:none;stroke:var(--line);stroke-width:8}
+.ring-fill{fill:none;stroke:var(--bar);stroke-width:8;stroke-linecap:round;stroke-dasharray:339.3;stroke-dashoffset:339.3;transform:rotate(-90deg);transform-origin:60px 60px;transition:stroke-dashoffset .35s ease-out}
+.ring-fill.err{stroke:var(--bad)}
+.ring-num{font-size:21px;font-weight:700;fill:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+.ring-label{color:var(--mut);font-size:13px;margin-top:12px;text-align:center;max-width:230px;line-height:1.4}
+section{transition:filter .3s ease,opacity .3s ease}
+section.running{filter:blur(5px);opacity:.25;pointer-events:none}
 .events tr[data-i]{cursor:pointer} .events tr[data-i]:hover td{background:var(--hl)}
 .events tr.sel td{background:var(--hl);font-weight:600}
 .badge{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600;border:1px solid currentColor}
@@ -57,6 +67,16 @@ tr.hl td{background:var(--hl)}
 </head>
 <body>
 <div id="progress" role="progressbar" aria-label="Check in progress" aria-valuemin="0" aria-valuemax="100"><div class="fill"></div></div>
+<div id="ring-overlay" aria-hidden="true">
+  <div style="text-align:center">
+    <svg width="120" height="120" viewBox="0 0 120 120">
+      <circle class="ring-track" cx="60" cy="60" r="54"/>
+      <circle class="ring-fill" id="ring-fill" cx="60" cy="60" r="54"/>
+      <text class="ring-num" id="ring-num" x="60" y="68" text-anchor="middle">0%</text>
+    </svg>
+    <div class="ring-label" id="ring-label"></div>
+  </div>
+</div>
 <main>
   <h1>Futures Case Checker</h1>
   <p class="sub">Enter an account name to check whether the liquidation claim is valid and get the macro.</p>
@@ -1096,21 +1116,46 @@ const PHASES = [   // [status text match, bar target %, usual seconds]; first ma
   [/market price/, 95, 45],
 ];
 const progress = (() => {
+  const CIRC = 339.3;
   const el = $("progress"), fill = el.querySelector(".fill");
-  let val = 0, from = 0, target = 0, tau = 1, t0 = 0, raf = 0, hideT = 0;
-  const draw = () => { fill.style.width = val + "%"; el.setAttribute("aria-valuenow", Math.round(val)); };
+  const ringEl = $("ring-overlay"), ringFill = $("ring-fill"), ringNum = $("ring-num"), ringLabel = $("ring-label");
+  let val = 0, from = 0, target = 0, tau = 1, t0 = 0, raf = 0, hideT = 0, activeSection = null;
+  const draw = () => {
+    fill.style.width = val + "%"; el.setAttribute("aria-valuenow", Math.round(val));
+    ringFill.style.strokeDashoffset = CIRC * (1 - val / 100);
+    ringNum.textContent = Math.round(val) + "%";
+  };
   const tick = () => {
     const t = (performance.now() - t0) / 1000;
     val = from + (target - from) * (1 - Math.exp(-t / tau));
     draw(); raf = requestAnimationFrame(tick);
   };
   const phase = (pct, secs) => { from = val; target = Math.max(pct, val); tau = Math.max(secs / 2.5, 0.5); t0 = performance.now(); };
+  const activeTab = () => { const b = document.querySelector(".tab.active"); return b ? $("tab-" + b.dataset.tab) : null; };
   return {
-    start() { clearTimeout(hideT); cancelAnimationFrame(raf); el.classList.remove("err"); val = 0; draw();
-              el.classList.add("on"); phase(12, 4); raf = requestAnimationFrame(tick); },
-    step(msg) { const p = PHASES.find(([re]) => re.test(msg || "")); if (p) phase(p[1], p[2]); },
-    end(failed) { cancelAnimationFrame(raf); el.classList.toggle("err", !!failed); val = 100; draw();
-                  hideT = setTimeout(() => { el.classList.remove("on"); setTimeout(() => { if (!el.classList.contains("on")) { val = 0; draw(); } }, 650); }, 350); },
+    start() {
+      clearTimeout(hideT); cancelAnimationFrame(raf);
+      el.classList.remove("err"); ringFill.classList.remove("err");
+      val = 0; draw(); ringLabel.textContent = "";
+      el.classList.add("on"); ringEl.classList.add("on");
+      activeSection = activeTab();
+      if (activeSection) activeSection.classList.add("running");
+      phase(12, 4); raf = requestAnimationFrame(tick);
+    },
+    step(msg) {
+      ringLabel.textContent = msg || "";
+      const p = PHASES.find(([re]) => re.test(msg || "")); if (p) phase(p[1], p[2]);
+    },
+    end(failed) {
+      cancelAnimationFrame(raf);
+      el.classList.toggle("err", !!failed); ringFill.classList.toggle("err", !!failed);
+      val = 100; draw(); ringLabel.textContent = failed ? "Something went wrong" : "Done";
+      if (activeSection) { activeSection.classList.remove("running"); activeSection = null; }
+      hideT = setTimeout(() => {
+        el.classList.remove("on"); ringEl.classList.remove("on");
+        setTimeout(() => { if (!el.classList.contains("on")) { val = 0; draw(); } }, 650);
+      }, 500);
+    },
   };
 })();
 // Status setter that also moves the progress bar
