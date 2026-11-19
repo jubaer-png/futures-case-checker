@@ -776,7 +776,7 @@ async function lookupPriorBalance(auth, acct, b) {
      WHERE accountId = @aid
        AND tradeDate BETWEEN DATE_SUB(@td, INTERVAL 1 DAY) AND @td
        AND timestamp < CAST(@ts AS DATETIME)
-     ORDER BY timestamp DESC LIMIT 1`,
+     ORDER BY timestamp DESC, id DESC LIMIT 1`,
     { aid: acct.id, td: { date: td }, ts: { datetime: dtFmt(firstTs) } }).catch(() => []);
   if (row) b.priorBalance = cents(row.amount);
 }
@@ -1184,6 +1184,7 @@ const progress = (() => {
 })();
 // Status setter that also moves the progress bar
 const tracked = setter => m => { setter(m); progress.step(m); };
+const elapsed = t0 => ` · ${((Date.now() - t0) / 1000).toFixed(1)}s`;
 
 // Copy a macro as rich text (link stays clickable) with a plain-text fallback
 async function copyRich(el, btn) {
@@ -1209,7 +1210,7 @@ $("a-go").addEventListener("click", async () => {
   const name = $("a-acct").value.trim();
   if (!name) return;
   $("a-go").disabled = true; $("a-out").classList.add("hidden"); aState = null;
-  let failed = false; progress.start();
+  const t0 = Date.now(); let failed = false; progress.start();
   try {
     const { result: r, fromCache: fc } = await withCache("detect", name, () => detectCheck(auth, name, u => {
       tracked(aStatus)(u.step);
@@ -1217,7 +1218,7 @@ $("a-go").addEventListener("click", async () => {
     }));
     if (!r.events.length) { aStatus(`${r.acct.name} has no auto-liquidations.`); return; }
     showDetect(r);
-    aStatus(fc ? "Loaded from cache." : "");
+    aStatus((fc ? "Loaded from cache." : "Done.") + elapsed(t0));
   } catch (ex) { failed = true; aStatus(ex.message, true); }
   finally { $("a-go").disabled = false; progress.end(failed); }
 });
